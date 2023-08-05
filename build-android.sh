@@ -21,44 +21,79 @@ echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
 echo "Licensed under LGPLv3 or later version.";
 echo "";
 
+FFMPEG_INPUT_ARCH="ARCH";
+
+read -p "Enter arch: [armv6, armv7, armv7n, armv8a] " FFMPEG_INPUT_ARCH
+
 if [ ! -d "ffmpeg" ]; then
   echo "[ERROR] FFmpeg source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
 fi
 
-
 echo "Creating output directories...";
 chmod -R 0777 .
-rm -rf ffmpeg/android
 mkdir -p ffmpeg/android
 mkdir -p ffmpeg/android/armv6
 mkdir -p ffmpeg/android/armv7
-mkdir -p ffmpeg/android/armv7n
-mkdir -p ffmpeg/android/armv8a
+mkdir -p ffmpeg/android/armv7-neon
+mkdir -p ffmpeg/android/aarch64
 mkdir -p ffmpeg/android/x86
 
 echo "Configure FFmpeg v$FFMPEG_VERSION build...";
 
 FFMPEG_BUILD_PLATFORM="linux";
-FFMPEG_TARGET_ARCH="armv6";
-FFMPEG_TARGET_CPU="armv6";
-ANDROID_TOOLCHAIN_CPUABI="arm";
-ANDROID_TARGET_API=5;
-FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
-	-finline-limit=300 -ffast-math \
-	-fstrict-aliasing -Werror=strict-aliasing \
-	-Wno-psabi \
-	-fdiagnostics-color=always \
-	-msoft-float \
-	-DANDROID -DNDEBUG"
-ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
+
+if [ $FFMPEG_INPUT_ARCH == "armv6" ]; then
+	ANDROID_TARGET_API=5;
+	FFMPEG_TARGET_ARCH="armv6";
+	FFMPEG_TARGET_CPU="armv6";
+	ANDROID_TOOLCHAIN_CPUABI="arm";
+elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
+	ANDROID_TARGET_API=5;
+	FFMPEG_TARGET_ARCH="armv7";
+	FFMPEG_TARGET_CPU="armv7";
+	ANDROID_TOOLCHAIN_CPUABI="arm";
+elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
+	ANDROID_TARGET_API=5;
+	FFMPEG_TARGET_ARCH="aarch64";
+	FFMPEG_TARGET_CPU="armv8-a";
+	ANDROID_TOOLCHAIN_CPUABI="aarch64";
+	ANDROID_TARGET_API=21;
+else
+	echo "Canceling...";
+	exit 1;
+fi;
+
+if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
+	FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+		-finline-limit=300 -ffast-math \
+		-fstrict-aliasing -Werror=strict-aliasing \
+		-Wno-psabi \
+		-fdiagnostics-color=always \
+		-DANDROID -DNDEBUG"
+	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
+else
+	FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+		-finline-limit=300 -ffast-math \
+		-fstrict-aliasing -Werror=strict-aliasing \
+		-Wno-psabi \
+		-fdiagnostics-color=always \
+		-msoft-float \
+		-DANDROID -DNDEBUG"
+	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
+fi;
 
 if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK ~r10e+
 	echo "[ERROR] ANDROID_NDK_HOME variable is not defined. Quiting...";
 	exit 1
 else
-	ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
-	ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
+	if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
+		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
+		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+	else
+		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
+		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
+	fi;
 fi
 
 if [ -z "$FFMPEG_GNUTLS" ]; then
@@ -70,7 +105,6 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--disable-everything \
 				--enable-cross-compile \
 				--arch=${FFMPEG_TARGET_ARCH} \
-				--enable-${FFMPEG_TARGET_ARCH} \
 				--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
 				--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
 				--nm=${ANDROID_NDK_TOOLCHAINS}nm \
@@ -137,7 +171,6 @@ else
 					--prefix=./android/${FFMPEG_TARGET_CPU} \
 					--enable-cross-compile \
 					--arch=${FFMPEG_TARGET_ARCH} \
-					--enable-${FFMPEG_TARGET_ARCH} \
 					--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
 					--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
 					--nm=${ANDROID_NDK_TOOLCHAINS}nm \
@@ -207,7 +240,7 @@ echo;
 echo "Build starts in 15 seconds. Waiting...";
 sleep 15s;
 echo;
-echo "Building FFmpeg build...";
+echo "Building FFmpeg for ${FFMPEG_TARGET_ARCH}...";
 make clean
 make -j8
 make install
@@ -218,9 +251,9 @@ echo "Linking FFmpeg libraries...";
 ${ANDROID_NDK_TOOLCHAINS}ld \
 -rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
 -L${ANDROID_NDK_SYSROOT}/usr/lib \
--L./android/${FFMPEG_TARGET_CPU}/lib \
+-L./android/${FFMPEG_TARGET_ARCH}/lib \
 -soname libffmpeg-v${FFMPEG_VERSION}.so -shared -nostdlib -Bsymbolic --whole-archive --no-undefined -o \
-./android/${FFMPEG_TARGET_CPU}/libffmpeg-v${FFMPEG_VERSION}.so \
+./android/${FFMPEG_TARGET_ARCH}/libffmpeg-v${FFMPEG_VERSION}.so \
 libavcodec/libavcodec.a \
 libavfilter/libavfilter.a \
 libswresample/libswresample.a \
