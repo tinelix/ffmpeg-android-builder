@@ -20,6 +20,8 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
+FFMPEG_VERSION := "4.0.4"
+
 LOCAL_MODULE := ffmpeg-prebuilt
 
 LOCAL_SRC_FILES := ../ffmpeg/android/armv7/libffmpeg-v${FFMPEG_VERSION}.so
@@ -29,8 +31,6 @@ LOCAL_EXPORT_C_INCLUDES := ../ffmpeg/android/armv6/include
 LOCAL_EXPORT_LDLIBS := ../ffmpeg/android/armv7/libffmpeg-v${FFMPEG_VERSION}.so
 
 LOCAL_PRELINK_MODULE := true
-
-FFMPEG_VERSION := "4.0.4"
 
 include $(PREBUILT_SHARED_LIBRARY)
 include $(CLEAR_VARS)
