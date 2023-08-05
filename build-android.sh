@@ -47,8 +47,9 @@ ANDROID_TARGET_API=5;
 FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
 	-finline-limit=300 -ffast-math \
 	-fstrict-aliasing -Werror=strict-aliasing \
-	-Wno-psabi -Wa,--noexecstack \
+	-Wno-psabi \
 	-fdiagnostics-color=always \
+	-msoft-float \
 	-DANDROID -DNDEBUG"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 
@@ -61,7 +62,7 @@ else
 fi
 
 if [ -z "$FFMPEG_GNUTLS" ]; then
-	echo "[WARNING] GNUTLS_HOME variable is not defined."
+	echo "[WARNING] FFMPEG_GNUTLS variable is not defined."
 	echo "          Streaming playback may be limited.";
 
 	FFMPEG_FLAGS="--target-os=linux \
@@ -75,10 +76,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--nm=${ANDROID_NDK_TOOLCHAINS}nm \
 				--sysroot=${ANDROID_NDK_SYSROOT} \
 				--disable-gpl \
-				--bindir=./android/${FFMPEG_TARGET_CPU} \
 				--enable-version3 \
-				--disable-shared \
-				--enable-static \
 				--disable-nonfree \
 				--enable-avcodec \
 				--enable-avformat \
@@ -87,39 +85,56 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-avfilter \
 				--enable-yasm \
 				--enable-asm \
+				--disable-programs \
+				--disable-ffmpeg \
+				--disable-ffplay \
+				--disable-ffprobe \
 				--disable-doc \
+				--disable-htmlpages \
+				--disable-d3d11va \
+				--disable-dxva2 \
+				--disable-vaapi \
+				--disable-vdpau \
+				--disable-videotoolbox \
+				--disable-encoders \
+				--disable-encoders \
+				--disable-decoders \
+				--disable-demuxers \
+				--disable-parsers \
+				--disable-muxers \
+				--disable-filters \
+				--disable-iconv \
+				--disable-debug \
 				--enable-network \
 				--enable-protocol=file,http,async \
 				--enable-armv5te \
 				--enable-parser=h263 \
 				--enable-parser=h264 \
 				--enable-parser=vp8 \
-				--enable-parser=opus \
 				--enable-parser=flac \
-				--enable-parser=mpeg4video \
-				--enable-parser=mpegaudio \
-				--enable-parser=vorbis \
-				--enable-demuxer=mpegts \
-				--enable-demuxer=mpegvideo \
+				--enable-parser=aac \
 				--enable-demuxer=flv \
-				--enable-demuxer=mov \
-				--enable-demuxer=ogg \
+				--enable-demuxer=mp3 \
+				--enable-demuxer=data \
 				--enable-decoder=mp3 \
 				--enable-decoder=aac \
 				--enable-decoder=vp8 \
-				--enable-decoder=mpeg4 \
+				--enable-decoder=h263 \
 				--enable-decoder=h264 \
-				--enable-decoder=opus \
 				--enable-decoder=flac \
 				--enable-decoder=vorbis \
 				--enable-decoder=aac \
+				--enable-encoder=libmp3lame \
+				--enable-encoder=vorbis \
 				--enable-muxer=mp4 \
 				--enable-muxer=ogg \
-				--enable-small"
+				--enable-muxer=mp3 \
+				--enable-small \
+				--enable-inline-asm \
+				--enable-optimizations"
 else
 	FFMPEG_FLAGS="--target-os=linux \
 					--prefix=./android/${FFMPEG_TARGET_CPU} \
-					--disable-everything \
 					--enable-cross-compile \
 					--arch=${FFMPEG_TARGET_ARCH} \
 					--enable-${FFMPEG_TARGET_ARCH} \
@@ -137,39 +152,60 @@ else
 					--enable-avfilter \
 					--enable-yasm \
 					--enable-asm \
+					--disable-programs \
+					--disable-ffmpeg \
+					--disable-ffplay \
+					--disable-ffprobe \
+					--disable-doc \
+					--disable-htmlpages \
+					--disable-d3d11va \
+					--disable-dxva2 \
+					--disable-vaapi \
+					--disable-vdpau \
+					--disable-videotoolbox \
+					--disable-encoders \
+					--disable-encoders \
+					--disable-decoders \
+					--disable-demuxers \
+					--disable-parsers \
+					--disable-muxers \
+					--disable-filters \
+					--disable-iconv \
+					--disable-debug \
 					--enable-network \
 					--enable-protocol=file,http,async \
 					--enable-armv5te \
 					--enable-parser=h263 \
 					--enable-parser=h264 \
 					--enable-parser=vp8 \
-					--enable-parser=opus \
 					--enable-parser=flac \
-					--enable-parser=mpeg4video \
-					--enable-parser=mpegaudio \
-					--enable-parser=vorbis \
-					--enable-demuxer=mpegts \
-					--enable-demuxer=mpegvideo \
+					--enable-parser=aac \
 					--enable-demuxer=flv \
-					--enable-demuxer=mov \
-					--enable-demuxer=ogg \
+					--enable-demuxer=mp3 \
+					--enable-demuxer=data \
 					--enable-decoder=mp3 \
 					--enable-decoder=aac \
 					--enable-decoder=vp8 \
-					--enable-decoder=mpeg4 \
+					--enable-decoder=h263 \
 					--enable-decoder=h264 \
-					--enable-decoder=opus \
 					--enable-decoder=flac \
 					--enable-decoder=vorbis \
 					--enable-decoder=aac \
+					--enable-encoder=libmp3lame \
+					--enable-encoder=vorbis \
 					--enable-muxer=mp4 \
 					--enable-muxer=ogg \
-					--enable-small"
+					--enable-small \
+					--enable-inline-asm \
+					--enable-optimizations"
 fi
 
 cd ffmpeg
 
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
+echo;
+echo "Build starts in 15 seconds. Waiting...";
+sleep 15s;
 echo;
 echo "Building FFmpeg build...";
 make clean
