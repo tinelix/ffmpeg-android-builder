@@ -154,6 +154,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-decoder=vp8 \
 				--enable-decoder=h263 \
 				--enable-decoder=h264 \
+				--enable-decoder=theora \
 				--enable-decoder=flac \
 				--enable-decoder=vorbis \
 				--enable-decoder=aac \
@@ -220,6 +221,7 @@ else
 					--enable-decoder=vp8 \
 					--enable-decoder=h263 \
 					--enable-decoder=h264 \
+					--enable-decoder=theora \
 					--enable-decoder=flac \
 					--enable-decoder=vorbis \
 					--enable-decoder=aac \
