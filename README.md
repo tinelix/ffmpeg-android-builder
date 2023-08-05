@@ -6,7 +6,7 @@ This is a special script that makes it easy to build [FFmpeg 4.0.4](https://gith
 2. Download Android NDK (>r10e): [developer.android.com](https://developer.android.com/ndk/downloads) or [Unsupported NDK Versions](https://github.com/android/ndk/wiki/Unsupported-Downloads)
 3. Clone repo.
    `git clone https://github.com/tinelix/ffmpeg-android-builder.git`
-4. Change './build-android.sh' file permissions to 0777 (`chmod ./build-android.sh 0777`) and run it.
+4. Change `./build-android.sh` file permissions to `0777` (`chmod ./build-android.sh 0777`) and run it.
 
 ### License
 This builder using FFmpeg (modified) source code licensed under LGPLv3 or later version. Scripts are also licensed under this same license.
