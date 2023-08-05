@@ -23,7 +23,7 @@ echo "";
 
 FFMPEG_INPUT_ARCH="ARCH";
 
-read -p "Enter arch: [armv6, armv7, armv7n, armv8a] " FFMPEG_INPUT_ARCH
+read -p "Specify architecture [armv6, armv7, armv8a]: " FFMPEG_INPUT_ARCH
 
 if [ ! -d "ffmpeg" ]; then
   echo "[ERROR] FFmpeg source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
@@ -35,8 +35,7 @@ chmod -R 0777 .
 mkdir -p ffmpeg/android
 mkdir -p ffmpeg/android/armv6
 mkdir -p ffmpeg/android/armv7
-mkdir -p ffmpeg/android/armv7-neon
-mkdir -p ffmpeg/android/aarch64
+mkdir -p ffmpeg/android/armv8-a
 mkdir -p ffmpeg/android/x86
 
 echo "Configure FFmpeg v$FFMPEG_VERSION build...";
@@ -237,7 +236,7 @@ cd ffmpeg
 
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
 echo;
-echo "Build starts in 15 seconds. Waiting...";
+echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
 sleep 15s;
 echo;
 echo "Building FFmpeg for ${FFMPEG_TARGET_ARCH}...";
@@ -251,9 +250,9 @@ echo "Linking FFmpeg libraries...";
 ${ANDROID_NDK_TOOLCHAINS}ld \
 -rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
 -L${ANDROID_NDK_SYSROOT}/usr/lib \
--L./android/${FFMPEG_TARGET_ARCH}/lib \
+-L./android/${FFMPEG_TARGET_CPU}/lib \
 -soname libffmpeg-v${FFMPEG_VERSION}.so -shared -nostdlib -Bsymbolic --whole-archive --no-undefined -o \
-./android/${FFMPEG_TARGET_ARCH}/libffmpeg-v${FFMPEG_VERSION}.so \
+./android/${FFMPEG_TARGET_CPU}/libffmpeg-v${FFMPEG_VERSION}.so \
 libavcodec/libavcodec.a \
 libavfilter/libavfilter.a \
 libswresample/libswresample.a \
