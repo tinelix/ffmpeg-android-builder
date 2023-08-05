@@ -1,0 +1,200 @@
+#!/bin/bash
+#
+#  Copyright © 2023 Dmitry Tretyakov (aka. Tinelix)
+#
+#  This program is free software: you can redistribute it and/or modify it under the terms of
+#  the GNU Lesser General Public License as published by the Free Software Foundation, either
+#  version 3 of the License, or (at your option) any later version.
+#  This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+#  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#  See the GNU Lesser General Public License for more details.
+#
+#  You should have received a copy of the GNU Lesser General Public License along with this
+#  program. If not, see https://www.gnu.org/licenses/.
+#
+#  Source code: https://github.com/tinelix/ffmpeg-android-builder
+
+FFMPEG_VERSION="$(cat ./ffmpeg/RELEASE)"
+
+echo "FFmpeg custom builder for Android"
+echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
+echo "Licensed under LGPLv3 or later version.";
+echo "";
+
+if [ ! -d "ffmpeg" ]; then
+  echo "[ERROR] FFmpeg source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
+  exit 1
+fi
+
+
+echo "Creating output directories...";
+chmod -R 0777 .
+rm -rf ffmpeg/android
+mkdir -p ffmpeg/android
+mkdir -p ffmpeg/android/armv6
+mkdir -p ffmpeg/android/armv7
+mkdir -p ffmpeg/android/armv7n
+mkdir -p ffmpeg/android/armv8a
+mkdir -p ffmpeg/android/x86
+
+echo "Configure FFmpeg v$FFMPEG_VERSION build...";
+
+FFMPEG_BUILD_PLATFORM="linux";
+FFMPEG_TARGET_ARCH="armv6";
+FFMPEG_TARGET_CPU="armv6";
+ANDROID_TOOLCHAIN_CPUABI="arm";
+ANDROID_TARGET_API=5;
+FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+	-finline-limit=300 -ffast-math \
+	-fstrict-aliasing -Werror=strict-aliasing \
+	-Wno-psabi -Wa,--noexecstack \
+	-fdiagnostics-color=always \
+	-DANDROID -DNDEBUG"
+ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
+
+if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK ~r10e+
+	echo "[ERROR] ANDROID_NDK_HOME variable is not defined. Quiting...";
+	exit 1
+else
+	ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
+	ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
+fi
+
+if [ -z "$FFMPEG_GNUTLS" ]; then
+	echo "[WARNING] GNUTLS_HOME variable is not defined."
+	echo "          Streaming playback may be limited.";
+
+	FFMPEG_FLAGS="--target-os=linux \
+				--prefix=./android/${FFMPEG_TARGET_CPU} \
+				--disable-everything \
+				--enable-cross-compile \
+				--arch=${FFMPEG_TARGET_ARCH} \
+				--enable-${FFMPEG_TARGET_ARCH} \
+				--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
+				--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
+				--nm=${ANDROID_NDK_TOOLCHAINS}nm \
+				--sysroot=${ANDROID_NDK_SYSROOT} \
+				--disable-gpl \
+				--bindir=./android/${FFMPEG_TARGET_CPU} \
+				--enable-version3 \
+				--disable-shared \
+				--enable-static \
+				--disable-nonfree \
+				--enable-avcodec \
+				--enable-avformat \
+				--enable-avutil \
+				--enable-swscale \
+				--enable-avfilter \
+				--enable-yasm \
+				--enable-asm \
+				--disable-doc \
+				--enable-network \
+				--enable-protocol=file,http,async \
+				--enable-armv5te \
+				--enable-parser=h263 \
+				--enable-parser=h264 \
+				--enable-parser=vp8 \
+				--enable-parser=opus \
+				--enable-parser=flac \
+				--enable-parser=mpeg4video \
+				--enable-parser=mpegaudio \
+				--enable-parser=vorbis \
+				--enable-demuxer=mpegts \
+				--enable-demuxer=mpegvideo \
+				--enable-demuxer=flv \
+				--enable-demuxer=mov \
+				--enable-demuxer=ogg \
+				--enable-decoder=mp3 \
+				--enable-decoder=aac \
+				--enable-decoder=vp8 \
+				--enable-decoder=mpeg4 \
+				--enable-decoder=h264 \
+				--enable-decoder=opus \
+				--enable-decoder=flac \
+				--enable-decoder=vorbis \
+				--enable-decoder=aac \
+				--enable-muxer=mp4 \
+				--enable-muxer=ogg \
+				--enable-small"
+else
+	FFMPEG_FLAGS="--target-os=linux \
+					--prefix=./android/${FFMPEG_TARGET_CPU} \
+					--disable-everything \
+					--enable-cross-compile \
+					--arch=${FFMPEG_TARGET_ARCH} \
+					--enable-${FFMPEG_TARGET_ARCH} \
+					--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
+					--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
+					--nm=${ANDROID_NDK_TOOLCHAINS}nm \
+					--sysroot=${ANDROID_NDK_SYSROOT} \
+					--disable-gpl \
+					--enable-version3 \
+					--disable-nonfree \
+					--enable-avcodec \
+					--enable-avformat \
+					--enable-avutil \
+					--enable-swscale \
+					--enable-avfilter \
+					--enable-yasm \
+					--enable-asm \
+					--enable-network \
+					--enable-protocol=file,http,async \
+					--enable-armv5te \
+					--enable-parser=h263 \
+					--enable-parser=h264 \
+					--enable-parser=vp8 \
+					--enable-parser=opus \
+					--enable-parser=flac \
+					--enable-parser=mpeg4video \
+					--enable-parser=mpegaudio \
+					--enable-parser=vorbis \
+					--enable-demuxer=mpegts \
+					--enable-demuxer=mpegvideo \
+					--enable-demuxer=flv \
+					--enable-demuxer=mov \
+					--enable-demuxer=ogg \
+					--enable-decoder=mp3 \
+					--enable-decoder=aac \
+					--enable-decoder=vp8 \
+					--enable-decoder=mpeg4 \
+					--enable-decoder=h264 \
+					--enable-decoder=opus \
+					--enable-decoder=flac \
+					--enable-decoder=vorbis \
+					--enable-decoder=aac \
+					--enable-muxer=mp4 \
+					--enable-muxer=ogg \
+					--enable-small"
+fi
+
+cd ffmpeg
+
+./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
+echo;
+echo "Building FFmpeg build...";
+make clean
+make -j8
+make install
+
+echo;
+echo "Linking FFmpeg libraries...";
+
+${ANDROID_NDK_TOOLCHAINS}ld \
+-rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
+-L${ANDROID_NDK_SYSROOT}/usr/lib \
+-L./android/${FFMPEG_TARGET_CPU}/lib \
+-soname libffmpeg-v${FFMPEG_VERSION}.so -shared -nostdlib -Bsymbolic --whole-archive --no-undefined -o \
+./android/${FFMPEG_TARGET_CPU}/libffmpeg-v${FFMPEG_VERSION}.so \
+libavcodec/libavcodec.a \
+libavfilter/libavfilter.a \
+libswresample/libswresample.a \
+libavformat/libavformat.a \
+libavutil/libavutil.a \
+libswscale/libswscale.a \
+-lc -lm -lz -ldl -llog --dynamic-linker=/system/bin/linker \
+${ANDROID_NDK_GCC}/libgcc.a
+
+echo;
+echo "FFmpeg successfully builded!";
+
+
