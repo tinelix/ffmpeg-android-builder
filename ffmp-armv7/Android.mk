@@ -20,7 +20,7 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
-FFMPEG_VERSION := "4.0.4"
+FFMPEG_VERSION := 4.0.4
 
 LOCAL_MODULE := ffmpeg-prebuilt
 
