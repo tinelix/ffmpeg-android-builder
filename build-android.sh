@@ -269,5 +269,7 @@ ${ANDROID_NDK_GCC}/libgcc.a
 
 echo;
 echo "FFmpeg successfully builded!";
+echo;
+echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory"
 
 
