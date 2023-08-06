@@ -33,9 +33,9 @@ fi
 echo "Creating output directories...";
 chmod -R 0777 .
 mkdir -p ffmpeg/android
-mkdir -p ffmpeg/android/armv6
-mkdir -p ffmpeg/android/armv7
-mkdir -p ffmpeg/android/armv8-a
+mkdir -p ffmpeg/android/armeabi
+mkdir -p ffmpeg/android/armeabi-v7a
+mkdir -p ffmpeg/android/arm64-v8a
 mkdir -p ffmpeg/android/x86
 
 echo "Configure FFmpeg v$FFMPEG_VERSION build...";
@@ -43,19 +43,22 @@ echo "Configure FFmpeg v$FFMPEG_VERSION build...";
 FFMPEG_BUILD_PLATFORM="linux";
 
 if [ $FFMPEG_INPUT_ARCH == "armv6" ]; then
-	ANDROID_TARGET_API=5;
 	FFMPEG_TARGET_ARCH="armv6";
 	FFMPEG_TARGET_CPU="armv6";
+	ANDROID_TARGET_ARCH="armeabi";
 	ANDROID_TOOLCHAIN_CPUABI="arm";
-elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
 	ANDROID_TARGET_API=5;
+elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
 	FFMPEG_TARGET_ARCH="armv7";
 	FFMPEG_TARGET_CPU="armv7";
+	ANDROID_TARGET_ARCH="armeabi-v7a";
 	ANDROID_TOOLCHAIN_CPUABI="arm";
+	ANDROID_TARGET_API=5;
 elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	ANDROID_TARGET_API=5;
 	FFMPEG_TARGET_ARCH="aarch64";
 	FFMPEG_TARGET_CPU="armv8-a";
+	ANDROID_TARGET_ARCH="arm64-v8a";
 	ANDROID_TOOLCHAIN_CPUABI="aarch64";
 	ANDROID_TARGET_API=21;
 else
@@ -100,7 +103,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 	echo "          Streaming playback may be limited.";
 
 	FFMPEG_FLAGS="--target-os=linux \
-				--prefix=./android/${FFMPEG_TARGET_CPU} \
+				--prefix=./android/${ANDROID_TARGET_ARCH} \
 				--disable-everything \
 				--enable-cross-compile \
 				--arch=${FFMPEG_TARGET_ARCH} \
@@ -168,7 +171,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-optimizations"
 else
 	FFMPEG_FLAGS="--target-os=linux \
-					--prefix=./android/${FFMPEG_TARGET_CPU} \
+					--prefix=./android/${ANDROID_TARGET_ARCH} \
 					--enable-cross-compile \
 					--arch=${FFMPEG_TARGET_ARCH} \
 					--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
@@ -241,7 +244,7 @@ echo;
 echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
 sleep 15s;
 echo;
-echo "Building FFmpeg for ${FFMPEG_TARGET_ARCH}...";
+echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
 make clean
 make -j8
 make install
