@@ -27,6 +27,8 @@ LOCAL_EXPORT_LDLIBS := ../ffmpeg/android/${ANDROID_ARCH}/libffmpeg-v${FFMPEG_VER
 
 LOCAL_PRELINK_MODULE := true
 
+LOCAL_LDFLAGS += -ljnigraphics
+
 include $(PREBUILT_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 
@@ -35,7 +37,7 @@ LOCAL_MODULE := ffmpeg-player
 LOCAL_SRC_FILES := ffmpeg-player.c
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../ffmpeg/android/${ANDROID_ARCH}/include
 LOCAL_SHARED_LIBRARY := ffmpeg-prebuilt
-LOCAL_LDLIBS    := -llog -ljnigraphics -lz -lm $(LOCAL_PATH)/../ffmpeg/android/${ANDROID_ARCH}/libffmpeg-v${FFMPEG_VERSION}.so
+LOCAL_LDLIBS    := -llog -lz -lm $(LOCAL_PATH)/../ffmpeg/android/${ANDROID_ARCH}/libffmpeg-v${FFMPEG_VERSION}.so
 
 include $(BUILD_SHARED_LIBRARY)
 
