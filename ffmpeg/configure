@@ -885,7 +885,7 @@ cp_if_changed(){
 # hack because the Android NDK does not provide pkg-config, and ffmpeg
 # requires pkg-config for configuring when building against external
 # libraries.
-pkg_config=./fake-pkg-config
+pkg_config=../fake-pkg-config
 
 # CONFIG_LIST contains configurable options, while HAVE_LIST is for
 # system-dependent things.
