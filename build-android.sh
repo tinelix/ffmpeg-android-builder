@@ -24,7 +24,12 @@ echo "";
 
 FFMPEG_INPUT_ARCH="ARCH";
 
-read -p "Specify architecture [armv6, armv7, armv8a]: " FFMPEG_INPUT_ARCH
+if [[ -z $1 ]];
+then
+    read -p "Specify architecture [armv6, armv7, armv8a]: " FFMPEG_INPUT_ARCH
+else
+    FFMPEG_INPUT_ARCH=$1
+fi
 
 if [ ! -d "ffmpeg" ]; then
   echo "[ERROR] FFmpeg source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
