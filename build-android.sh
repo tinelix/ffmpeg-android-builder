@@ -159,7 +159,7 @@ make  -j4 install
 echo;
 echo "Linking FFmpeg libraries...";
 $ANDROID_NDK_TOOLCHAINS-ar d libavcodec/libavcodec.a inverse.o
-$ANDROID_NDK_TOOLCHAINS-ld -rpath-link=$ANDROID_NDK_SYSROOT/usr/lib -L$ANDROID_NDK_SYSROOT/usr/lib  -soname libffmpeg.so -shared -nostdlib  -Bsymbolic --whole-archive --no-undefined -o ./android/$ANDROID_TARGET_ARCH/libffmpeg-$FFMPEG_VERSION.so libavcodec/libavcodec.a libavformat/libavformat.a libavutil/libavutil.a libswscale/libswscale.a -lc -lm -lz -ldl -llog --dynamic-linker=/system/bin/linker $ANDROID_NDK_GCC/libgcc.a
+$ANDROID_NDK_TOOLCHAINS-ld -rpath-link=$ANDROID_NDK_SYSROOT/usr/lib -L$ANDROID_NDK_SYSROOT/usr/lib  -soname libffmpeg.so -shared -nostdlib  -Bsymbolic --whole-archive --no-undefined -o ./android/$ANDROID_TARGET_ARCH/libffmpeg-v$FFMPEG_VERSION.so libavcodec/libavcodec.a libavformat/libavformat.a libavutil/libavutil.a libswscale/libswscale.a -lc -lm -lz -ldl -llog --dynamic-linker=/system/bin/linker $ANDROID_NDK_GCC/libgcc.a
 echo;
 echo "FFmpeg successfully builded!";
 echo;
