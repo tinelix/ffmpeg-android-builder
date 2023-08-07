@@ -16,45 +16,33 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config.h"
 #include "file.h"
-#include "internal.h"
-#include "log.h"
-#include "mem.h"
 #include <fcntl.h>
 #include <sys/stat.h>
-#if HAVE_UNISTD_H
 #include <unistd.h>
-#endif
-#if HAVE_IO_H
-#include <io.h>
-#endif
 #if HAVE_MMAP
 #include <sys/mman.h>
 #elif HAVE_MAPVIEWOFFILE
+#include <io.h>
 #include <windows.h>
 #endif
 
-typedef struct FileLogContext {
+typedef struct {
     const AVClass *class;
     int   log_offset;
     void *log_ctx;
 } FileLogContext;
 
 static const AVClass file_log_ctx_class = {
-    .class_name                = "FILE",
-    .item_name                 = av_default_item_name,
-    .option                    = NULL,
-    .version                   = LIBAVUTIL_VERSION_INT,
-    .log_level_offset_offset   = offsetof(FileLogContext, log_offset),
-    .parent_log_context_offset = offsetof(FileLogContext, log_ctx),
+    "FILE", av_default_item_name, NULL, LIBAVUTIL_VERSION_INT,
+    offsetof(FileLogContext, log_offset), offsetof(FileLogContext, log_ctx)
 };
 
 int av_file_map(const char *filename, uint8_t **bufptr, size_t *size,
                 int log_offset, void *log_ctx)
 {
     FileLogContext file_log_ctx = { &file_log_ctx_class, log_offset, log_ctx };
-    int err, fd = avpriv_open(filename, O_RDONLY);
+    int err, fd = open(filename, O_RDONLY);
     struct stat st;
     av_unused void *ptr;
     off_t off_size;
@@ -141,6 +129,20 @@ void av_file_unmap(uint8_t *bufptr, size_t size)
 #endif
 }
 
-int av_tempfile(const char *prefix, char **filename, int log_offset, void *log_ctx) {
-    return avpriv_tempfile(prefix, filename, log_offset, log_ctx);
+#ifdef TEST
+
+#undef printf
+
+int main(void)
+{
+    uint8_t *buf;
+    size_t size;
+    if (av_file_map("file.c", &buf, &size, 0, NULL) < 0)
+        return 1;
+
+    buf[0] = 's';
+    printf("%s", buf);
+    av_file_unmap(buf, size);
+    return 0;
 }
+#endif

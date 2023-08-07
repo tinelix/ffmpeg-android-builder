@@ -1,6 +1,7 @@
-LIBAVFORMAT_MAJOR {
-    global:
-        av*;
-    local:
-        *;
+LIBAVFORMAT_$MAJOR {
+        global: *;
+        local:
+                ff_*_demuxer;
+                ff_*_muxer;
+                ff_*_protocol;
 };

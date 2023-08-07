@@ -1,4 +1,5 @@
 /*
+ *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -19,17 +20,9 @@
 #ifndef AVCODEC_VERSION_H
 #define AVCODEC_VERSION_H
 
-/**
- * @file
- * @ingroup libavc
- * Libavcodec version macros.
- */
-
-#include "libavutil/version.h"
-
-#define LIBAVCODEC_VERSION_MAJOR  58
-#define LIBAVCODEC_VERSION_MINOR  18
-#define LIBAVCODEC_VERSION_MICRO 100
+#define LIBAVCODEC_VERSION_MAJOR 53
+#define LIBAVCODEC_VERSION_MINOR  7
+#define LIBAVCODEC_VERSION_MICRO  0
 
 #define LIBAVCODEC_VERSION_INT  AV_VERSION_INT(LIBAVCODEC_VERSION_MAJOR, \
                                                LIBAVCODEC_VERSION_MINOR, \
@@ -42,96 +35,38 @@
 #define LIBAVCODEC_IDENT        "Lavc" AV_STRINGIFY(LIBAVCODEC_VERSION)
 
 /**
- * FF_API_* defines may be placed below to indicate public API that will be
- * dropped at a future version bump. The defines themselves are not part of
- * the public API and may change, break or disappear at any time.
- *
- * @note, when bumping the major version it is recommended to manually
- * disable each FF_API_* in its own commit instead of disabling them all
- * at once through the bump. This improves the git bisect-ability of the change.
+ * Those FF_API_* defines are not part of public API.
+ * They may change, break or disappear at any time.
  */
-
-#ifndef FF_API_LOWRES
-#define FF_API_LOWRES            (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_PALETTE_CONTROL
+#define FF_API_PALETTE_CONTROL  (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_DEBUG_MV
-#define FF_API_DEBUG_MV          (LIBAVCODEC_VERSION_MAJOR < 58)
+#ifndef FF_API_OLD_SAMPLE_FMT
+#define FF_API_OLD_SAMPLE_FMT   (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_AVCTX_TIMEBASE
-#define FF_API_AVCTX_TIMEBASE    (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_OLD_AUDIOCONVERT
+#define FF_API_OLD_AUDIOCONVERT (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_CODED_FRAME
-#define FF_API_CODED_FRAME       (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_ANTIALIAS_ALGO
+#define FF_API_ANTIALIAS_ALGO   (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_SIDEDATA_ONLY_PKT
-#define FF_API_SIDEDATA_ONLY_PKT (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_REQUEST_CHANNELS
+#define FF_API_REQUEST_CHANNELS (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_VDPAU_PROFILE
-#define FF_API_VDPAU_PROFILE     (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_OPT_H
+#define FF_API_OPT_H            (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_CONVERGENCE_DURATION
-#define FF_API_CONVERGENCE_DURATION (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_THREAD_INIT
+#define FF_API_THREAD_INIT      (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_AVPICTURE
-#define FF_API_AVPICTURE         (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_OLD_FF_PICT_TYPES
+#define FF_API_OLD_FF_PICT_TYPES (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_AVPACKET_OLD_API
-#define FF_API_AVPACKET_OLD_API (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_FLAC_GLOBAL_OPTS
+#define FF_API_FLAC_GLOBAL_OPTS (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_RTP_CALLBACK
-#define FF_API_RTP_CALLBACK      (LIBAVCODEC_VERSION_MAJOR < 59)
+#ifndef FF_API_GET_PIX_FMT_NAME
+#define FF_API_GET_PIX_FMT_NAME (LIBAVCODEC_VERSION_MAJOR < 54)
 #endif
-#ifndef FF_API_VBV_DELAY
-#define FF_API_VBV_DELAY         (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_CODER_TYPE
-#define FF_API_CODER_TYPE        (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_STAT_BITS
-#define FF_API_STAT_BITS         (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_PRIVATE_OPT
-#define FF_API_PRIVATE_OPT      (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_ASS_TIMING
-#define FF_API_ASS_TIMING       (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_OLD_BSF
-#define FF_API_OLD_BSF          (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_COPY_CONTEXT
-#define FF_API_COPY_CONTEXT     (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_GET_CONTEXT_DEFAULTS
-#define FF_API_GET_CONTEXT_DEFAULTS (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_NVENC_OLD_NAME
-#define FF_API_NVENC_OLD_NAME    (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_STRUCT_VAAPI_CONTEXT
-#define FF_API_STRUCT_VAAPI_CONTEXT (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_MERGE_SD_API
-#define FF_API_MERGE_SD_API      (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_TAG_STRING
-#define FF_API_TAG_STRING        (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_GETCHROMA
-#define FF_API_GETCHROMA         (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_CODEC_GET_SET
-#define FF_API_CODEC_GET_SET     (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_USER_VISIBLE_AVHWACCEL
-#define FF_API_USER_VISIBLE_AVHWACCEL (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_LOCKMGR
-#define FF_API_LOCKMGR (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-#ifndef FF_API_NEXT
-#define FF_API_NEXT              (LIBAVCODEC_VERSION_MAJOR < 59)
-#endif
-
 
 #endif /* AVCODEC_VERSION_H */
