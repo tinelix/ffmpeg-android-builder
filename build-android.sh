@@ -117,11 +117,14 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-armv5te
     --enable-parser=h263
     --enable-parser=h264
+    --enable-parser=threora
     --enable-parser=vp8
     --enable-parser=flac
     --enable-parser=aac
+    --enable-parser=vorbis
     --enable-demuxer=flv
     --enable-demuxer=mp3
+    --enable-demuxer=ogg
     --enable-demuxer=data
     --enable-decoder=mp3
     --enable-decoder=aac
