@@ -45,7 +45,7 @@ mkdir -p ffmpeg/android/x86
 
 cd ffmpeg
 
-echo "Configure FFmpeg v$FFMPEG_VERSION build...";
+echo "Configuring FFmpeg v$FFMPEG_VERSION build for $FFMPEG_INPUT_ARCH...";
 
 FFMPEG_BUILD_PLATFORM="linux";
 
@@ -84,6 +84,8 @@ else
 		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	fi;
 fi
+
+OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -marm -march=${FFMPEG_TARGET_CPU}"
 
 FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --cross-prefix=$ANDROID_NDK_TOOLCHAINS-
@@ -163,4 +165,4 @@ echo "FFmpeg successfully builded!";
 echo;
 echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
 echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
-OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -marm -march=${FFMPEG_TARGET_CPU}"
+echo;
