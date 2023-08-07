@@ -26,7 +26,7 @@ FFMPEG_INPUT_ARCH="ARCH";
 
 if [[ -z $1 ]];
 then
-    read -p "Specify architecture [armv6, armv7, armv8a]: " FFMPEG_INPUT_ARCH
+    read -p "Specify architecture [armv6, armv7]: " FFMPEG_INPUT_ARCH
 else
     FFMPEG_INPUT_ARCH=$1
 fi
@@ -41,7 +41,6 @@ chmod -R 0777 .
 mkdir -p ffmpeg/android
 mkdir -p ffmpeg/android/armeabi
 mkdir -p ffmpeg/android/armeabi-v7a
-mkdir -p ffmpeg/android/arm64-v8a
 mkdir -p ffmpeg/android/x86
 
 cd ffmpeg
@@ -63,23 +62,15 @@ elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
 	ANDROID_TOOLCHAIN_CPUABI="arm";
 	ANDROID_TARGET_API=5;
 elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_TARGET_ARCH="aarch64";
-	FFMPEG_TARGET_CPU="armv8-a";
-	ANDROID_TARGET_ARCH="arm64-v8a";
-	ANDROID_TOOLCHAIN_CPUABI="aarch64";
-	ANDROID_TARGET_API=21;
+	echo "ARMv8a not supported for legacy Android versions. Canceling...";
+	exit 1;
 else
 	echo "Canceling...";
 	exit 1;
 fi;
 
-if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
-	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
-else
-	FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
-	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
-fi;
+FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
+ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 
 if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK r6b-r10e
 	echo "[ERROR] ANDROID_NDK_HOME variable is not defined. Quiting...";
