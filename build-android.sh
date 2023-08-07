@@ -23,10 +23,18 @@ echo "Licensed under LGPLv3 or later version.";
 echo "";
 
 FFMPEG_INPUT_ARCH="ARCH";
+NDK_RELEASE="NDK_REL";
 
 if [[ -z $1 ]];
 then
     read -p "Specify architecture [armv6, armv7]: " FFMPEG_INPUT_ARCH
+else
+    FFMPEG_INPUT_ARCH=$1
+fi
+
+if [[ -z $2 ]];
+then
+    read -p "Specify NDK release [r7b, r8e, r10e]: " NDK_RELEASE
 else
     FFMPEG_INPUT_ARCH=$1
 fi
@@ -80,7 +88,7 @@ else
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
 		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 	else
-		if [[ $ANDROID_NDK_HOME == *"android-ndk-r8e"* || $ANDROID_NDK_HOME == *"android-ndk-r7b"* ]]; then
+		if [[ $NDK_RELEASE = "r8e" || $NDK_RELEASE = "r7b" ]]; then
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
 			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
 		else
