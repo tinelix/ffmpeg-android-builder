@@ -7,7 +7,7 @@ This is a special script that makes it easy to build [FFmpeg 0.8.5](https://gith
 3. Clone repo.
    `git clone https://github.com/tinelix/ffmpeg-android-builder.git`
 4. `cd ffmpeg-android-builder`
-5. Change `./build-android.sh` file and `ffmpeg` directory permissions to `0777` (`chmod -R 0777 .`) and run it.
+5. Change `./build-android-x.y.z.sh` file and `ffmpeg-x.y.z` directories permissions to `0777` (`chmod -R 0777 .`) and run it.
 
 ### License
 This builder using FFmpeg (modified) source code licensed under LGPLv3 or later version. Scripts are also licensed under this same license.
