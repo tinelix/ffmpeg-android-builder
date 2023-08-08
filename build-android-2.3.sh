@@ -103,7 +103,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-cross-compile
     --target-os=linux
     --extra-cflags=-I$ANDROID_NDK_SYSROOT/usr/include
-    --arch=arm
+    --arch=${FFMPEG_TARGET_ARCH}
     --disable-shared
     --enable-static
     --disable-gpl
@@ -125,7 +125,6 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-filters
     --enable-network
     --enable-protocol=file,http,async
-    --enable-armv5te
     --enable-parser=h263
     --enable-parser=h264
     --enable-parser=threora
@@ -154,7 +153,8 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-symver
     --disable-debug
     --disable-stripping
-    --enable-small"
+    --enable-small
+    --sysroot=${ANDROID_NDK_SYSROOT}"
 
 ./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib"
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
