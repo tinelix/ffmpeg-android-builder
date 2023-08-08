@@ -15,7 +15,7 @@
 #
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
-FFMPEG_VERSION="$(cat ./ffmpeg/RELEASE)"
+FFMPEG_VERSION="$(cat ./ffmpeg-0.8.5/RELEASE)"
 
 echo "FFmpeg custom builder for Android"
 echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
@@ -39,19 +39,19 @@ else
     NDK_RELEASE=$2
 fi
 
-if [ ! -d "ffmpeg" ]; then
-  echo "[ERROR] FFmpeg source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
+if [ ! -d "ffmpeg-0.8.5" ]; then
+  echo "[ERROR] FFmpeg 0.8.5 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
 fi
 
 echo "Creating output directories...";
 chmod -R 0777 .
-mkdir -p ffmpeg/android
-mkdir -p ffmpeg/android/armeabi
-mkdir -p ffmpeg/android/armeabi-v7a
-mkdir -p ffmpeg/android/x86
+mkdir -p ffmpeg-0.8.5/android
+mkdir -p ffmpeg-0.8.5/android/armeabi
+mkdir -p ffmpeg-0.8.5/android/armeabi-v7a
+mkdir -p ffmpeg-0.8.5/android/x86
 
-cd ffmpeg
+cd ffmpeg-0.8.5
 
 echo "Configuring FFmpeg v$FFMPEG_VERSION build for $FFMPEG_INPUT_ARCH...";
 
