@@ -134,7 +134,6 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--disable-dxva2 \
 				--disable-vaapi \
 				--disable-vdpau \
-				--disable-videotoolbox \
 				--disable-encoders \
 				--disable-decoders \
 				--disable-demuxers \
@@ -201,7 +200,6 @@ else
 					--disable-dxva2 \
 					--disable-vaapi \
 					--disable-vdpau \
-					--disable-videotoolbox \
 					--disable-encoders \
 					--disable-encoders \
 					--disable-decoders \
