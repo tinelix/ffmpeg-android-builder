@@ -23,20 +23,13 @@ echo "Licensed under LGPLv3 or later version.";
 echo "";
 
 FFMPEG_INPUT_ARCH="ARCH";
-NDK_RELEASE="NDK_REL";
+NDK_RELEASE="r10e";
 
 if [[ -z $1 ]];
 then
     read -p "Specify architecture [armv6, armv7]: " FFMPEG_INPUT_ARCH
 else
     FFMPEG_INPUT_ARCH=$1
-fi
-
-if [[ -z $2 ]];
-then
-    read -p "Specify NDK release [r7b, r8e, r10e]: " NDK_RELEASE
-else
-    NDK_RELEASE=$2
 fi
 
 if [ ! -d "ffmpeg-2.3" ]; then
