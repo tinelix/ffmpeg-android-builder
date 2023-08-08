@@ -51,7 +51,7 @@ mkdir -p ffmpeg-2.3/android/armeabi
 mkdir -p ffmpeg-2.3/android/armeabi-v7a
 mkdir -p ffmpeg-2.3/android/x86
 
-cd ffmpeg-0.8.5
+cd ffmpeg-2.3
 
 echo "Configuring FFmpeg v$FFMPEG_VERSION build for $FFMPEG_INPUT_ARCH...";
 
