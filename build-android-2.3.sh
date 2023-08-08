@@ -73,7 +73,7 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
+FFMPEG_CFLAGS="-Os -fpic -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 
 if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK r7b-r10e
