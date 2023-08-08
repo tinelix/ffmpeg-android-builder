@@ -131,7 +131,6 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--disable-ffprobe \
 				--disable-doc \
 				--disable-htmlpages \
-				--disable-d3d11va \
 				--disable-dxva2 \
 				--disable-vaapi \
 				--disable-vdpau \
@@ -199,7 +198,6 @@ else
 					--disable-ffprobe \
 					--disable-doc \
 					--disable-htmlpages \
-					--disable-d3d11va \
 					--disable-dxva2 \
 					--disable-vaapi \
 					--disable-vdpau \
