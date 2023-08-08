@@ -242,7 +242,7 @@ else
 					--enable-optimizations"
 fi
 
-cd ffmpeg-4.0.4
+cd ffmpeg-2.6
 
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
 echo;
