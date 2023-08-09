@@ -15,7 +15,7 @@
 #
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
-FFMPEG_VERSION="$(cat ./ffmpeg-0.8.5/RELEASE)"
+FFMPEG_VERSION="$(cat ./ffmpeg-0.7.1/VERSION)"
 
 echo "FFmpeg custom builder for Android"
 echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
