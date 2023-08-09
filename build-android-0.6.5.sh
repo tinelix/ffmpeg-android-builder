@@ -15,7 +15,7 @@
 #
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
-FFMPEG_VERSION="$(cat ./ffmpeg-0.6.5/RELEASE)"
+FFMPEG_VERSION="$(cat ./ffmpeg-0.6.5/VERSION)"
 
 echo "FFmpeg custom builder for Android"
 echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
@@ -153,7 +153,6 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-muxer=mp4
     --enable-muxer=ogg
     --enable-muxer=mp3
-    --disable-symver
     --disable-debug
     --disable-stripping
     --enable-small"
