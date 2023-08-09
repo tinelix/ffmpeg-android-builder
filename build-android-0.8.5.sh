@@ -34,7 +34,7 @@ fi
 
 if [[ -z $2 ]];
 then
-    read -p "Specify NDK release [r7b, r8e, r10e]: " NDK_RELEASE
+    read -p "Specify NDK release [r7, r8e, r10e]: " NDK_RELEASE
 else
     NDK_RELEASE=$2
 fi
