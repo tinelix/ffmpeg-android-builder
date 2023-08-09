@@ -107,7 +107,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --cross-prefix=$ANDROID_NDK_TOOLCHAINS-
     --enable-cross-compile
     --target-os=linux
-    --extra-cflags=-I$ANDROID_NDK_SYSROOT/usr/include
+    --extra-cflags=-I$ANDROID_NDK_SYSROOT/usr/include -fPIC -DANDROID
     --arch=arm
     --disable-shared
     --enable-static
@@ -131,6 +131,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-network
     --enable-protocol=file,http,async
     --enable-armv5te
+    --enable-neon
     --enable-parser=h263
     --enable-parser=h264
     --enable-parser=threora
