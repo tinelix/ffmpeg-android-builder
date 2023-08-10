@@ -207,13 +207,12 @@ else
 					--disable-decoders \
 					--disable-demuxers \
 					--disable-parsers \
-					--disable-protocols \
 					--disable-muxers \
 					--disable-filters \
 					--disable-iconv \
 					--disable-debug \
 					--enable-network \
-					--enable-protocol=file,tcp,http,async \
+					--disable-protocol=udp,gopher,rtmp,rtp,srtp \
 					--enable-armv5te \
 					--enable-parser=h263 \
 					--enable-parser=h264 \
