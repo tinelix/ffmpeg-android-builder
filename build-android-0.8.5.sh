@@ -143,6 +143,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-parser=vorbis
     --enable-demuxer=flv
     --enable-demuxer=mp3
+    --enable-demuxer=ogv
     --enable-demuxer=ogg
     --enable-demuxer=data
     --enable-demuxer=mp4
