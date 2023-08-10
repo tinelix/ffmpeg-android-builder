@@ -136,7 +136,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-neon
     --enable-parser=h263
     --enable-parser=h264
-    --enable-parser=threora
+    --enable-parser=theora
     --enable-parser=vp8
     --enable-parser=flac
     --enable-parser=aac
@@ -145,6 +145,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-demuxer=mp3
     --enable-demuxer=ogg
     --enable-demuxer=data
+    --enable-demuxer=mp4
     --enable-decoder=mp3
     --enable-decoder=aac
     --enable-decoder=vp8
