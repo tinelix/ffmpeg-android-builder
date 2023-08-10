@@ -212,7 +212,7 @@ else
 					--disable-iconv \
 					--disable-debug \
 					--enable-network \
-					--enable-protocol=file,http,async \
+					--enable-protocol=file,tcp,http,async \
 					--enable-armv5te \
 					--enable-parser=h263 \
 					--enable-parser=h264 \

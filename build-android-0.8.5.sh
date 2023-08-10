@@ -156,7 +156,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-muxers
     --disable-filters
     --enable-network
-    --enable-protocol=file,http,async
+    --enable-protocol=file,tcp,http,async
     --enable-parser=h263
     --enable-parser=h264
     --enable-parser=theora
