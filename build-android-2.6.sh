@@ -146,7 +146,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-protocol=file,http,async \
 				--enable-armv5te \
 				--enable-parser=h263 \
-				--enable-parser=theora
+				--enable-parser=theora \
 				--enable-parser=h264 \
 				--enable-parser=vp8 \
 				--enable-parser=flac \
