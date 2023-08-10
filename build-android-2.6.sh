@@ -207,6 +207,7 @@ else
 					--disable-decoders \
 					--disable-demuxers \
 					--disable-parsers \
+					--disable-protocols \
 					--disable-muxers \
 					--disable-filters \
 					--disable-iconv \
