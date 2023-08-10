@@ -14,7 +14,7 @@
 #
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
-FFMPEG_VERSION="$(cat ./ffmpeg-2.6/RELEASE)"
+FFMPEG_VERSION="$(cat ./ffmpeg-3.1.4/RELEASE)"
 
 echo "FFmpeg custom builder for Android"
 echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
@@ -30,18 +30,18 @@ else
     FFMPEG_INPUT_ARCH=$1
 fi
 
-if [ ! -d "ffmpeg-2.6" ]; then
-  echo "[ERROR] FFmpeg 2.6 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
+if [ ! -d "ffmpeg-3.1.4" ]; then
+  echo "[ERROR] FFmpeg 3.1.4 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
 fi
 
 echo "Creating output directories...";
 chmod -R 0777 .
-mkdir -p ffmpeg-2.6/android
-mkdir -p ffmpeg-2.6/android/armeabi
-mkdir -p ffmpeg-2.6/android/armeabi-v7a
-mkdir -p ffmpeg-2.6/android/arm64-v8a
-mkdir -p ffmpeg-2.6/android/x86
+mkdir -p ffmpeg-3.1.4/android
+mkdir -p ffmpeg-3.1.4/android/armeabi
+mkdir -p ffmpeg-3.1.4/android/armeabi-v7a
+mkdir -p ffmpeg-3.1.4/android/arm64-v8a
+mkdir -p ffmpeg-3.1.4/android/x86
 
 echo "Configuring FFmpeg v$FFMPEG_VERSION build...";
 
@@ -242,7 +242,7 @@ else
 					--enable-optimizations"
 fi
 
-cd ffmpeg-2.6
+cd ffmpeg-3.1.4
 
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
 echo;
