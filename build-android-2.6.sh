@@ -156,7 +156,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-demuxer=flv \
 				--enable-demuxer=mp3 \
 				--enable-demuxer=data \
-   				--enable-demuxer=mp4 \
+   				--enable-demuxer=h264 \
 				--enable-decoder=mp3 \
 				--enable-decoder=aac \
 				--enable-decoder=vp8 \
