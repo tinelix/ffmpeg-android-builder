@@ -146,6 +146,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-protocol=file,http,async \
 				--enable-armv5te \
 				--enable-parser=h263 \
+				--enable-parser=theora
 				--enable-parser=h264 \
 				--enable-parser=vp8 \
 				--enable-parser=flac \
@@ -155,6 +156,7 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-demuxer=flv \
 				--enable-demuxer=mp3 \
 				--enable-demuxer=data \
+   				--enable-demuxer=mp4 \
 				--enable-decoder=mp3 \
 				--enable-decoder=aac \
 				--enable-decoder=vp8 \
@@ -273,5 +275,4 @@ echo "FFmpeg successfully builded!";
 echo;
 echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
 echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
-
 
