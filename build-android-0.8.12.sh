@@ -1,5 +1,5 @@
 #!/bin/bash
-#  Build FFmpeg 0.8.5 for legacy Android devices
+#  Build FFmpeg 0.8.12 for legacy Android devices
 #
 #  Copyright © 2023 Dmitry Tretyakov (aka. Tinelix)
 #
@@ -27,14 +27,14 @@ NDK_RELEASE="NDK_REL";
 
 if [[ -z $1 ]];
 then
-    read -p "Specify architecture [armv6, armv7]: " FFMPEG_INPUT_ARCH
+    read -p "Specify architecture [armv6, armv7, x86]: " FFMPEG_INPUT_ARCH
 else
     FFMPEG_INPUT_ARCH=$1
 fi
 
 if [[ -z $2 ]];
 then
-    read -p "Specify NDK release [r7b, r8e, r10e]: " NDK_RELEASE
+    read -p "Specify NDK release [r7, r8e, r10e]: " NDK_RELEASE
 else
     NDK_RELEASE=$2
 fi
@@ -56,6 +56,7 @@ cd ffmpeg-0.8.12
 echo "Configuring FFmpeg v$FFMPEG_VERSION build for $FFMPEG_INPUT_ARCH...";
 
 FFMPEG_BUILD_PLATFORM="linux";
+FFMPEG_CPU_FLAGS=""
 
 if [ $FFMPEG_INPUT_ARCH == "armv6" ]; then
 	FFMPEG_TARGET_ARCH="armv6";
@@ -69,6 +70,12 @@ elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
 	ANDROID_TARGET_ARCH="armeabi-v7a";
 	ANDROID_TOOLCHAIN_CPUABI="arm";
 	ANDROID_TARGET_API=5;
+elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
+	FFMPEG_TARGET_ARCH="x86";
+	FFMPEG_TARGET_CPU="x86";
+	ANDROID_TARGET_ARCH="x86";
+	ANDROID_TOOLCHAIN_CPUABI="i686";
+	ANDROID_TARGET_API=9;
 elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	echo "ARMv8a not supported for legacy Android versions. Canceling...";
 	exit 1;
@@ -77,8 +84,10 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64/usr/include"
+FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
+OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -marm -march=${FFMPEG_TARGET_CPU}"
+
 
 if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK r7b-r10e
 	echo "[ERROR] NDK (requires r7b-r10e) not installed or ANDROID_NDK_HOME variable is not defined. Quiting...";
@@ -87,24 +96,45 @@ else
 	if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
 		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
-	else
-		if [[ $NDK_RELEASE == "r8e" || $NDK_RELEASE == "r7b" ]]; then
+	elif [[ $FFMPEG_INPUT_ARCH == "armv7" || $FFMPEG_INPUT_ARCH == "armv6" ]]; then
+        FFMPEG_CPU_FLAGS="--enable-armv5te --enable-neon"
+		if [ $NDK_RELEASE == "r8e" ]; then
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi"
 			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
+        elif [ $NDK_RELEASE == "r5b" ]; then
+            ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-eabi-4.4.0/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/bin/${ANDROID_TOOLCHAIN_CPUABI}-eabi"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-eabi-4.4.0/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-eabi/4.4.0/"
+        elif [ $NDK_RELEASE == "r7" ]; then
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
 		else
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi"
 			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 		fi;
+    else
+        FFMPEG_CPU_FLAGS="--disable-asm"
+        OPTIMIZE_CFLAGS="-m32"
+        ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
+        if [ $NDK_RELEASE == "r8e" ]; then
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.4.3"
+        elif [ $NDK_RELEASE == "r5b" ]; then
+            ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.0/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.0/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.4.0"
+        elif [ $NDK_RELEASE == "r7" ]; then
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.4.3"
+		else
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
+			ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		fi;
 	fi;
 fi
-
-OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -marm -march=${FFMPEG_TARGET_CPU}"
 
 FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --cross-prefix=$ANDROID_NDK_TOOLCHAINS-
     --enable-cross-compile
     --target-os=linux
-    --extra-cflags=-I$ANDROID_NDK_SYSROOT/usr/include
     --arch=arm
     --disable-shared
     --enable-static
@@ -126,19 +156,20 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-muxers
     --disable-filters
     --enable-network
-    --enable-protocol=file,http,async
-    --enable-armv5te
+    --disable-protocol=udp,gopher,rtmp,rtp,srtp
     --enable-parser=h263
     --enable-parser=h264
-    --enable-parser=threora
+    --enable-parser=theora
     --enable-parser=vp8
     --enable-parser=flac
     --enable-parser=aac
     --enable-parser=vorbis
     --enable-demuxer=flv
     --enable-demuxer=mp3
+    --enable-demuxer=ogv
     --enable-demuxer=ogg
     --enable-demuxer=data
+    --enable-demuxer=mp4
     --enable-decoder=mp3
     --enable-decoder=aac
     --enable-decoder=vp8
@@ -158,7 +189,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-stripping
     --enable-small"
 
-./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib"
+./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -fPIC -DANDROID" $FFMPEG_CPU_FLAGS
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
