@@ -189,7 +189,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-stripping
     --enable-small"
 
-./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -fPIC -DANDROID" $FFMPEG_CPU_FLAGS
+./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" $FFMPEG_CPU_FLAGS
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
