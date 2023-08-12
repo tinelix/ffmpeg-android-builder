@@ -206,7 +206,8 @@ sleep 15s;
 echo;
 echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
 make clean
-make  -j4 install
+make  -j4
+make install
 echo;
 echo "Linking FFmpeg libraries...";
 $ANDROID_NDK_TOOLCHAINS-ar d libavcodec/libavcodec.a inverse.o
