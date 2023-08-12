@@ -5,8 +5,8 @@
 # not provide any kind of pkg-config.
 
 case $1 in
-    --exists)
-        if [ $2 = "freetype2" ]; then
+	--exists)
+	if [ $2 = "freetype2" ]; then
             return 0
         else
             return 1
