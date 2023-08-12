@@ -166,6 +166,8 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
+    dos2unix ./fake-pkg-config
+fi
 
 ./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib"
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
