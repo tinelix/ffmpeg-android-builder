@@ -244,6 +244,9 @@ fi
 
 cd ffmpeg-4.0.4
 
+if [ -f "dos2unix" ]; then
+    dos2unix ./configure
+
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
 echo;
 echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
