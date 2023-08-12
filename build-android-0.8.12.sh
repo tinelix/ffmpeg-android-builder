@@ -190,7 +190,6 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-muxer=ogg
     --enable-muxer=mp3
     --disable-symver
-    --enable-debug=3
     --disable-stripping
     --enable-small"
 
