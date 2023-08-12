@@ -147,9 +147,10 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-version3
     --disable-nonfree
     --disable-doc
-    --enable-ffmpeg
+    --disable-ffmpeg
     --disable-ffplay
     --disable-ffserver
+    --disable-ffprobe
     --disable-avdevice
     --disable-avfilter
     --disable-postproc
