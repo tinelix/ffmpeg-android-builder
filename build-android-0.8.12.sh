@@ -216,3 +216,4 @@ echo;
 echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
 echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
 echo;
+#
