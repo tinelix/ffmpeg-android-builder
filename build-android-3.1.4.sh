@@ -246,6 +246,7 @@ cd ffmpeg-3.1.4
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
+fi;
 
 ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
 echo;
