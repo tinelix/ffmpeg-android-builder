@@ -195,6 +195,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
+    dos2unix ./fake-pkg-config
 fi;
 
 ./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" $FFMPEG_CPU_FLAGS
