@@ -10,4 +10,4 @@ This is a special script that makes it easy to build [FFmpeg 0.8.12](https://git
 5. Change `./build-android-x.y.z.sh` file and `ffmpeg-x.y.z` directories permissions to `0777` (`chmod -R 0777 .`) and run it.
 
 ### License
-This builder using FFmpeg (modified) source code licensed under LGPLv2.1 or later version with LGPLv3 licensing model as default. Scripts are also licensed under this same license.
+This builder using FFmpeg (modified) source code licensed under LGPLv2.1 or later version with LGPLv3 licensing model as default. Scripts are also licensed under LGPLv3.
