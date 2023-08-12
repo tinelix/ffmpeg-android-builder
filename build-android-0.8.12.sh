@@ -140,7 +140,7 @@ fi
 FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-cross-compile
     --target-os=linux
-    --arch=arm
+    --arch=$FFMPEG_TARGET_ARCH
     --disable-shared
     --enable-static
     --disable-gpl
