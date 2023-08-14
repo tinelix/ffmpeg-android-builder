@@ -115,9 +115,9 @@ else
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	    fi;
     else
-        FFMPEG_CPU_FLAGS="--disable-asm --disable-yasm -fno-inline-small-functions"
+        FFMPEG_CPU_FLAGS="--disable-asm"
         OPTIMIZE_CFLAGS="-m32"
-        FFMPEG_CFLAGS="-O1 -Wa,-q -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86/usr/include"
+        FFMPEG_CFLAGS="-O1 -Wa,-q -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86/usr/include -finline-limit=300 -fstrict-aliasing"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
         if [ $NDK_RELEASE == "r8e" ]; then
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.6/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
