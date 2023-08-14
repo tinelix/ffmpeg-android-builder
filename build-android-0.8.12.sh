@@ -115,6 +115,7 @@ else
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	    fi;
     else
+        OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -march=${FFMPEG_TARGET_CPU} -fasm"
         FFMPEG_CPU_FLAGS="--disable-asm"
         OPTIMIZE_CFLAGS="-m32"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
