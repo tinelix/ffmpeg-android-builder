@@ -115,7 +115,7 @@ else
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	    fi;
     else
-        FFMPEG_CPU_FLAGS="--disable-asm"
+        FFMPEG_CPU_FLAGS="--disable-asm --disable-yasm"
         OPTIMIZE_CFLAGS="-m32"
         FFMPEG_CFLAGS="-O1 -Wa,-q -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86/usr/include"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
