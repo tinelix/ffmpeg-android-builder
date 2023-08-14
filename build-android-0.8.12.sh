@@ -97,7 +97,7 @@ else
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
 		ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 	elif [[ $FFMPEG_INPUT_ARCH == "armv7" || $FFMPEG_INPUT_ARCH == "armv6" ]]; then
-        FFMPEG_CPU_FLAGS="--enable-armv5te --enable-neon"
+        FFMPEG_CPU_FLAGS="--enable-armv5te"
 	    if [ $NDK_RELEASE == "r8e" ]; then
 		    ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi"
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
@@ -141,6 +141,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-cross-compile
     --target-os=linux
     --arch=$FFMPEG_TARGET_ARCH
+    --sysroot=$ANDROID_NDK_SYSROOT
     --disable-shared
     --enable-static
     --disable-gpl
@@ -193,12 +194,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-stripping
     --enable-small"
 
-if [ -f "dos2unix" ]; then
-    dos2unix ./configure
-    dos2unix ./fake-pkg-config
-fi;
-
-./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" $FFMPEG_CPU_FLAGS
+./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
@@ -211,7 +207,7 @@ sleep 15s;
 echo;
 echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
 make clean
-make -j4 
+make -j4
 make install
 echo;
 echo "Linking FFmpeg libraries...";
