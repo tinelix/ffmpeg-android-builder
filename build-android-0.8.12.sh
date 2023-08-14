@@ -84,7 +84,7 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
+FFMPEG_CFLAGS="-fPIC  -DANDROID -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -fno-short-enums  -fno-strict-aliasing -finline-limit=300 -marm -march=${FFMPEG_TARGET_CPU}"
 
@@ -115,7 +115,7 @@ else
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	    fi;
     else
-        OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16-fno-short-enums -fno-strict-aliasing -finline-limit=300 -march=${FFMPEG_TARGET_CPU} -fasm"
+        OPTIMIZE_CFLAGS="-fPIC -mfloat-abi=softfp -mfpu=vfpv3-d16-fno-short-enums -fno-strict-aliasing -finline-limit=300 -march=${FFMPEG_TARGET_CPU} -fasm"
         FFMPEG_CPU_FLAGS="--disable-asm"
         OPTIMIZE_CFLAGS="-m32"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
@@ -193,12 +193,23 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-small"
 
 ./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="$FFMPEG_CFLAGS" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
-sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
-sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
-sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
-sed -i 's/HAVE_ROUNDF 0/HAVE_ROUNDF 1/g' config.h
-sed -i 's/HAVE_TRUNC 0/HAVE_TRUNC 1/g' config.h
-sed -i 's/HAVE_TRUNCF 0/HAVE_TRUNCF 1/g' config.h
+echo;
+echo "Patching FFmpeg for use in Android..."
+sed -i "s/#define restrict restrict/#define restrict/g" config.h
+sed -i "/static/,/}/d" libavutil/libm.h
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavcodec/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libavcodec/Makefile
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavfilter/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libavfilter/Makefile
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavformat/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libavformat/Makefile
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavutil/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libavutil/Makefile
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libpostproc/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libpostproc/Makefile
+sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libswscale/Makefile
+sed -i "/include \$(SUBDIR)..\/config.mak/d" libswscale/Makefile
+
 echo;
 echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
 sleep 15s;
