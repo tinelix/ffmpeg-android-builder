@@ -138,7 +138,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
 
     if((s->out_format == FMT_H263 || s->out_format == FMT_H261) && s->mpeg_quant==0){
 
-        __asm__ volatile(
+        __asm__ __attribute__ ((noinline)) volatile(
             "movd %%"REG_a", "MM"3              \n\t" // last_non_zero_p1
             SPREADW(MM"3")
             "pxor "MM"7, "MM"7                  \n\t" // 0
@@ -173,7 +173,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
                                 "%xmm4", "%xmm5", "%xmm6", "%xmm7")
         );
     }else{ // FMT_H263
-        __asm__ volatile(
+        __asm__ __attribute__ ((noinline)) volatile(
             "movd %%"REG_a", "MM"3              \n\t" // last_non_zero_p1
             SPREADW(MM"3")
             "pxor "MM"7, "MM"7                  \n\t" // 0
@@ -207,7 +207,7 @@ static int RENAME(dct_quantize)(MpegEncContext *s,
                                 "%xmm4", "%xmm5", "%xmm6", "%xmm7")
         );
     }
-    __asm__ volatile(
+    __asm__ __attribute__ ((noinline)) volatile(
         "movd %1, "MM"1                     \n\t" // max_qcoeff
         SPREADW(MM"1")
         "psubusw "MM"1, "MM"4               \n\t"

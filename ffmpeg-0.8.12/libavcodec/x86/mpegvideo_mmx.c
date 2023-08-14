@@ -56,7 +56,7 @@ static void dct_unquantize_h263_intra_mmx(MpegEncContext *s,
     else
         nCoeffs= s->inter_scantable.raster_end[ s->block_last_index[n] ];
 //printf("%d %d  ", qmul, qadd);
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "movd %1, %%mm6                 \n\t" //qmul
                 "packssdw %%mm6, %%mm6          \n\t"
                 "packssdw %%mm6, %%mm6          \n\t"
@@ -119,7 +119,7 @@ static void dct_unquantize_h263_inter_mmx(MpegEncContext *s,
 
     nCoeffs= s->inter_scantable.raster_end[ s->block_last_index[n] ];
 //printf("%d %d  ", qmul, qadd);
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "movd %1, %%mm6                 \n\t" //qmul
                 "packssdw %%mm6, %%mm6          \n\t"
                 "packssdw %%mm6, %%mm6          \n\t"
@@ -215,7 +215,7 @@ static void dct_unquantize_mpeg1_intra_mmx(MpegEncContext *s,
         block0 = block[0] * s->c_dc_scale;
     /* XXX: only mpeg1 */
     quant_matrix = s->intra_matrix;
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "pcmpeqw %%mm7, %%mm7           \n\t"
                 "psrlw $15, %%mm7               \n\t"
                 "movd %2, %%mm6                 \n\t"
@@ -278,7 +278,7 @@ static void dct_unquantize_mpeg1_inter_mmx(MpegEncContext *s,
     nCoeffs= s->intra_scantable.raster_end[ s->block_last_index[n] ]+1;
 
         quant_matrix = s->inter_matrix;
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "pcmpeqw %%mm7, %%mm7           \n\t"
                 "psrlw $15, %%mm7               \n\t"
                 "movd %2, %%mm6                 \n\t"
@@ -350,7 +350,7 @@ static void dct_unquantize_mpeg2_intra_mmx(MpegEncContext *s,
     else
         block0 = block[0] * s->c_dc_scale;
     quant_matrix = s->intra_matrix;
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "pcmpeqw %%mm7, %%mm7           \n\t"
                 "psrlw $15, %%mm7               \n\t"
                 "movd %2, %%mm6                 \n\t"
@@ -411,7 +411,7 @@ static void dct_unquantize_mpeg2_inter_mmx(MpegEncContext *s,
     else nCoeffs= s->intra_scantable.raster_end[ s->block_last_index[n] ];
 
         quant_matrix = s->inter_matrix;
-__asm__ volatile(
+__asm__ __attribute__ ((noinline)) volatile(
                 "pcmpeqw %%mm7, %%mm7           \n\t"
                 "psrlq $48, %%mm7               \n\t"
                 "movd %2, %%mm6                 \n\t"
@@ -483,7 +483,7 @@ static void  denoise_dct_mmx(MpegEncContext *s, DCTELEM *block){
 
     s->dct_count[intra]++;
 
-    __asm__ volatile(
+    __asm__ __attribute__ ((noinline)) volatile(
         "pxor %%mm7, %%mm7                      \n\t"
         "1:                                     \n\t"
         "pxor %%mm0, %%mm0                      \n\t"
@@ -537,7 +537,7 @@ static void  denoise_dct_sse2(MpegEncContext *s, DCTELEM *block){
 
     s->dct_count[intra]++;
 
-    __asm__ volatile(
+    __asm__ __attribute__ ((noinline)) volatile(
         "pxor %%xmm7, %%xmm7                    \n\t"
         "1:                                     \n\t"
         "pxor %%xmm0, %%xmm0                    \n\t"
