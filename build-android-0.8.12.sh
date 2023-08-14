@@ -194,7 +194,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-stripping
     --enable-small"
 
-./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
+./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-O3 -I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
