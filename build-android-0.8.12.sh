@@ -197,18 +197,6 @@ echo;
 echo "Patching FFmpeg for use in Android..."
 sed -i "s/#define restrict restrict/#define restrict/g" config.h
 sed -i "/static/,/}/d" libavutil/libm.h
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavcodec/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libavcodec/Makefile
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavfilter/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libavfilter/Makefile
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavformat/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libavformat/Makefile
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libavutil/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libavutil/Makefile
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libpostproc/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libpostproc/Makefile
-sed -i "/include \$(SUBDIR)..\/subdir.mak/d" libswscale/Makefile
-sed -i "/include \$(SUBDIR)..\/config.mak/d" libswscale/Makefile
 
 echo;
 echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
