@@ -86,7 +86,7 @@ fi;
 
 FFMPEG_CFLAGS="-fPIC -DANDROID -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
-OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -fno-short-enums  -fno-strict-aliasing -finline-limit=300 -marm -march=${FFMPEG_TARGET_CPU}"
+OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -fno-short-enums -fno-strict-aliasing -finline-limit=300 -marm -march=${FFMPEG_TARGET_CPU}"
 
 
 if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK r7b-r10e
@@ -117,7 +117,7 @@ else
     else
         OPTIMIZE_CFLAGS="-fPIC -DANDROID -mfloat-abi=softfp -mfpu=vfpv3-d16-fno-short-enums -fno-strict-aliasing -finline-limit=300 -march=${FFMPEG_TARGET_CPU} -fasm"
         FFMPEG_CPU_FLAGS="--disable-asm"
-        OPTIMIZE_CFLAGS="-m32"
+        OPTIMIZE_CFLAGS="-march=i686 -mtune=intel -m32"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
         if [ $NDK_RELEASE == "r8e" ]; then
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
