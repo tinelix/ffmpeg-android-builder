@@ -115,8 +115,9 @@ else
 		    ANDROID_NDK_GCC="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
 	    fi;
     else
-        FFMPEG_CPU_FLAGS="--disable-asm --disable-yasm"
+        FFMPEG_CPU_FLAGS="--disable-asm"
         OPTIMIZE_CFLAGS="-m32"
+        FFMPEG_CFLAGS="-O1 -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
         ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TARGET_ARCH}"
         if [ $NDK_RELEASE == "r8e" ]; then
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android"
@@ -194,7 +195,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-stripping
     --enable-small"
 
-./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="-O3 -I$ANDROID_NDK_SYSROOT/usr/include -DANDROID" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
+./configure $FFMPEG_FLAGS --cross-prefix=$CROSS_PREFIX --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -gstabs+ -nostdlib" --extra-cflags="$FFMPEG_CFLAGS" --cc=$ANDROID_NDK_TOOLCHAINS-gcc --nm=$ANDROID_NDK_TOOLCHAINS-nm
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
