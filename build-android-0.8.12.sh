@@ -164,11 +164,11 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-bsfs
     --enable-network
     --disable-protocol=udp,gopher,rtmp,rtp,srtp
-    --enable-parser='h263,h264,theora,vp8,flac,aac,aac_latm,vorbis,mp3,mpeg4video'
-    --enable-demuxer='flv,mp3,ogv,ogg,data,mp4'
-    --enable-decoder='mp3,aac,vp8,h263,h264,theora,flac,vorbis,aac,aac_latm,mpeg4video'
-    --enable-encoder='libmp3lame,vorbis,h264,aac'
-    --enable-muxer='mp4,ogg,mp3'
+    --enable-parser=h263,h264,theora,vp8,flac,aac,aac_latm,vorbis,mp3,mpeg4video
+    --enable-demuxer=flv,mp3,ogv,ogg,data,mp4
+    --enable-decoder=mp3,aac,vp8,h263,h264,theora,flac,vorbis,aac,aac_latm,mpeg4video
+    --enable-encoder=libmp3lame,vorbis,h264,aac
+    --enable-muxer=mp4,ogg,mp3
     --disable-symver
     --disable-debug
     --disable-stripping
