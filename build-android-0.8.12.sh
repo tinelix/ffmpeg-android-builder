@@ -84,7 +84,7 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include -O3 -fPIC -DANDROID -DHAVE_SYS_UIO_H=1 -fasm -fno-strict-aliasing -finline-limit=300"
+FFMPEG_CFLAGS="-O3 -fpic -DANDROID -DHAVE_SYS_UIO_H=1 -fasm -fno-strict-aliasing -finline-limit=300 -Wno-psabi -fno-short-enums -I${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm/usr/include"
 ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 OPTIMIZE_CFLAGS="-mfloat-abi=softfp -mfpu=vfpv3-d16 -marm -march=${FFMPEG_TARGET_CPU}"
 
@@ -161,41 +161,24 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --disable-parsers
     --disable-muxers
     --disable-filters
+    --disable-bsfs
     --enable-network
     --disable-protocol=udp,gopher,rtmp,rtp,srtp
-    --enable-parser=h263
-    --enable-parser=h264
-    --enable-parser=theora
-    --enable-parser=vp8
-    --enable-parser=flac
-    --enable-parser=aac
-    --enable-parser=vorbis
-    --enable-demuxer=flv
-    --enable-demuxer=mp3
-    --enable-demuxer=ogv
-    --enable-demuxer=ogg
-    --enable-demuxer=data
-    --enable-demuxer=mp4
-    --enable-decoder=mp3
-    --enable-decoder=aac
-    --enable-decoder=vp8
-    --enable-decoder=h263
-    --enable-decoder=h264
-    --enable-decoder=theora
-    --enable-decoder=flac
-    --enable-decoder=vorbis
-    --enable-decoder=aac
-    --enable-encoder=libmp3lame
-    --enable-encoder=vorbis
-    --enable-muxer=mp4
-    --enable-muxer=ogg
-    --enable-muxer=mp3
+    --enable-parser='h263,h264,theora,vp8,flac,aac,aac_latm,vorbis,mp3,mpeg4video'
+    --enable-demuxer='flv,mp3,ogv,ogg,data,mp4'
+    --enable-decoder='mp3,aac,vp8,h263,h264,theora,flac,vorbis,aac,aac_latm,mpeg4video'
+    --enable-encoder='libmp3lame,vorbis,h264,aac'
+    --enable-muxer='mp4,ogg,mp3'
     --disable-symver
     --disable-debug
     --disable-stripping
     --enable-small"
 
-./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include -fPIC -DANDROID" $FFMPEG_CPU_FLAGS
+if [ $FFMPEG_INPUT_ARCH == "x86" ]; then
+    ./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include " $FFMPEG_CPU_FLAGS
+else
+    ./configure $FFMPEG_FLAGS --extra-ldflags="-Wl,-rpath-link=$ANDROID_NDK_SYSROOT/usr/lib -L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib -lc -lm -ldl -llog" --extra-cflags="$FFMPEG_CFLAGS" $FFMPEG_CPU_FLAGS
+fi;
 sed -i 's/HAVE_LRINT 0/HAVE_LRINT 1/g' config.h
 sed -i 's/HAVE_LRINTF 0/HAVE_LRINTF 1/g' config.h
 sed -i 's/HAVE_ROUND 0/HAVE_ROUND 1/g' config.h
