@@ -175,7 +175,7 @@ FFMPEG_FLAGS="--prefix=./android/$ANDROID_TARGET_ARCH
     --enable-small"
 
 if [ $FFMPEG_INPUT_ARCH == "x86" ]; then
-    ./configure $FFMPEG_FLAGS --extra-ldflags="-L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include " $FFMPEG_CPU_FLAGS
+    ./configure $FFMPEG_FLAGS --extra-ldflags="-Wl,-rpath-link=$ANDROID_NDK_SYSROOT/usr/lib -L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib -lm -ldl -llog" --extra-cflags="-I$ANDROID_NDK_SYSROOT/usr/include " $FFMPEG_CPU_FLAGS
 else
     ./configure $FFMPEG_FLAGS --extra-ldflags="-Wl,-rpath-link=$ANDROID_NDK_SYSROOT/usr/lib -L$ANDROID_NDK_SYSROOT/usr/lib -nostdlib -lc -lm -ldl -llog" --extra-cflags="$FFMPEG_CFLAGS" $FFMPEG_CPU_FLAGS
 fi;
