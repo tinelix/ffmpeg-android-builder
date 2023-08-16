@@ -144,33 +144,11 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--disable-debug \
 				--enable-network \
 				--enable-protocol=file,http,async \
-				--enable-armv5te \
-				--enable-parser=h263 \
-				--enable-parser=theora \
-				--enable-parser=h264 \
-				--enable-parser=vp8 \
-				--enable-parser=flac \
-				--enable-parser=aac \
-				--enable-parser=vorbis \
-				--enable-parser=ogg \
-				--enable-demuxer=flv \
-				--enable-demuxer=mp3 \
-				--enable-demuxer=data \
-   				--enable-demuxer=h264 \
-				--enable-decoder=mp3 \
-				--enable-decoder=aac \
-				--enable-decoder=vp8 \
-				--enable-decoder=h263 \
-				--enable-decoder=h264 \
-				--enable-decoder=theora \
-				--enable-decoder=flac \
-				--enable-decoder=vorbis \
-				--enable-decoder=aac \
-				--enable-encoder=libmp3lame \
-				--enable-encoder=vorbis \
-				--enable-muxer=mp4 \
-				--enable-muxer=ogg \
-				--enable-muxer=mp3 \
+				--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
+				--enable-demuxer=flv,mp3,data \
+				--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
+				--enable-encoder=libmp3lame,vorbis,aac \
+				--enable-muxer=mp4,ogg,mp3 \
 				--enable-small \
 				--enable-inline-asm \
 				--enable-optimizations"
@@ -213,30 +191,11 @@ else
 					--disable-debug \
 					--enable-network \
 					--disable-protocol=udp,gopher,rtmp,rtp,srtp \
-					--enable-armv5te \
-					--enable-parser=h263 \
-					--enable-parser=h264 \
-					--enable-parser=vp8 \
-					--enable-parser=flac \
-					--enable-parser=aac \
-					--enable-demuxer=flv \
-					--enable-demuxer=mp3 \
-					--enable-demuxer=data \
-					--enable-demuxer=mp4 \
-					--enable-demuxer=ogv \
-					--enable-decoder=mp3 \
-					--enable-decoder=aac \
-					--enable-decoder=vp8 \
-					--enable-decoder=h263 \
-					--enable-decoder=h264 \
-					--enable-decoder=theora \
-					--enable-decoder=flac \
-					--enable-decoder=vorbis \
-					--enable-decoder=aac \
-					--enable-encoder=libmp3lame \
-					--enable-encoder=vorbis \
-					--enable-muxer=mp4 \
-					--enable-muxer=ogg \
+					--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
+					--enable-demuxer=flv,mp3,data \
+					--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
+					--enable-encoder=libmp3lame,vorbis,aac \
+					--enable-muxer=mp4,ogg,mp3 \
 					--enable-small \
 					--enable-inline-asm \
 					--enable-optimizations"
