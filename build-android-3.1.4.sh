@@ -102,11 +102,11 @@ else
 	fi;
 fi
 
-if [ -z "$FFMPEG_GNUTLS" ]; then
-	echo "[WARNING] FFMPEG_GNUTLS variable is not defined."
+if [ $2 != "securetr" ]; then
+	echo "[WARNING] Argument 'securetr' is not defined."
 	echo "          Streaming playback may be limited.";
 
-	FFMPEG_FLAGS="--target-os=linux \
+	FFMPEG_FLAGS="--target-os=android \
 				--prefix=./android/${ANDROID_TARGET_ARCH} \
 				--disable-everything \
 				--enable-cross-compile \
@@ -153,52 +153,53 @@ if [ -z "$FFMPEG_GNUTLS" ]; then
 				--enable-inline-asm \
 				--enable-optimizations"
 else
-	FFMPEG_FLAGS="--target-os=linux \
-					--prefix=./android/${ANDROID_TARGET_ARCH} \
-					--enable-cross-compile \
-					--arch=${FFMPEG_TARGET_ARCH} \
-					--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
-					--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
-					--nm=${ANDROID_NDK_TOOLCHAINS}nm \
-					--sysroot=${ANDROID_NDK_SYSROOT} \
-					--disable-gpl \
-					--enable-version3 \
-					--disable-nonfree \
-					--enable-avcodec \
-					--enable-avformat \
-					--enable-avutil \
-					--enable-swscale \
-					--enable-avfilter \
-					--enable-yasm \
-					--enable-asm \
-					--disable-programs \
-					--disable-ffmpeg \
-					--disable-ffplay \
-					--disable-ffprobe \
-					--disable-doc \
-					--disable-htmlpages \
-					--disable-dxva2 \
-					--disable-vaapi \
-					--disable-vdpau \
-					--disable-encoders \
-					--disable-encoders \
-					--disable-decoders \
-					--disable-demuxers \
-					--disable-parsers \
-					--disable-muxers \
-					--disable-filters \
-					--disable-iconv \
-					--disable-debug \
-					--enable-network \
-					--disable-protocol=udp,gopher,rtmp,rtp,srtp \
-					--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
-					--enable-demuxer=flv,mp3,data \
-					--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
-					--enable-encoder=libmp3lame,vorbis,aac \
-					--enable-muxer=mp4,ogg,mp3 \
-					--enable-small \
-					--enable-inline-asm \
-					--enable-optimizations"
+	FFMPEG_FLAGS="--target-os=android \
+				--prefix=./android/${ANDROID_TARGET_ARCH} \
+				--disable-everything \
+				--enable-cross-compile \
+				--arch=${FFMPEG_TARGET_ARCH} \
+				--cc=${ANDROID_NDK_TOOLCHAINS}gcc \
+				--cross-prefix=${ANDROID_NDK_TOOLCHAINS} \
+				--nm=${ANDROID_NDK_TOOLCHAINS}nm \
+				--sysroot=${ANDROID_NDK_SYSROOT} \
+				--disable-gpl \
+				--enable-version3 \
+				--disable-nonfree \
+				--enable-avcodec \
+				--enable-avformat \
+				--enable-avutil \
+				--enable-swscale \
+				--enable-avfilter \
+				--enable-yasm \
+				--enable-asm \
+				--disable-programs \
+				--disable-ffmpeg \
+				--disable-ffplay \
+				--disable-ffprobe \
+				--disable-doc \
+				--disable-htmlpages \
+				--disable-dxva2 \
+				--disable-vaapi \
+				--disable-vdpau \
+				--disable-encoders \
+				--disable-decoders \
+				--disable-demuxers \
+				--disable-parsers \
+				--disable-muxers \
+				--disable-filters \
+				--disable-iconv \
+				--disable-debug \
+				--enable-network \
+				--enable-securetransport \
+				--enable-protocol=file,http,tls,async \
+				--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
+				--enable-demuxer=flv,mp3,data \
+				--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
+				--enable-encoder=libmp3lame,vorbis,aac \
+				--enable-muxer=mp4,ogg,mp3 \
+				--enable-small \
+				--enable-inline-asm \
+				--enable-optimizations"
 fi
 
 cd ffmpeg-3.1.4
