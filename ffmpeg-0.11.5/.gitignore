@@ -61,4 +61,3 @@ tools/pktdumper
 tools/probetest
 tools/qt-faststart
 tools/trasher
-version.h
