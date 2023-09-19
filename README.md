@@ -1,5 +1,5 @@
 # FFmpeg custom builder for Android
-This is a special script that makes it easy to build [FFmpeg 0.7.1](https://github.com/FFmpeg/FFmpeg/tree/n0.7.1), [FFmpeg 0.8.12](https://github.com/FFmpeg/FFmpeg/tree/n0.8.12), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android. Builds FFmpeg 0.8.12 without problems in Android NDK r8c with Android 2.0 NDK platform (kinda), but builds FFmpeg 3.1.4 in Android NDK r11c as well.
+This is a special script that makes it easy to build [FFmpeg 0.7.1](https://github.com/FFmpeg/FFmpeg/tree/n0.7.1), [FFmpeg 0.11.5](https://github.com/FFmpeg/FFmpeg/tree/n0.11.5), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android. Builds FFmpeg 0.8.12 without problems in Android NDK r8c with Android 2.0 NDK platform (kinda), but builds FFmpeg 3.1.4 in Android NDK r11c as well.
 
 ### Building
 1. If there is none in-the-box, install the missing packages in your package manager: `gcc` `g++` `yasm` `gettext` `autoconf` `automake` `cmake` `git` `git-core` `libass-dev` `libfreetype6-dev` `libmp3lame-dev` `libsdl2-dev` `libtool` `libvdpau-dev` `libvorbis-dev` `pkg-config` `wget` `zlib1g-dev` `texinfo` for Ubuntu/Debian and their based distributions.
