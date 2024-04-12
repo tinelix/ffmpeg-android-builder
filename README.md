@@ -47,4 +47,4 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
 ```
 
 ### License
-This builder using FFmpeg (modified) source code licensed under LGPLv2.1 or later version with LGPLv3 licensing model as default. Scripts are also licensed under LGPLv3.
+This builder using FFmpeg (modified) source code licensed under [LGPLv2.1 or later version](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv2.1) with [LGPLv3 licensing model](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv3) as default. Scripts are also licensed under [LGPLv3](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.BUILDER).
