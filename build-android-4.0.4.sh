@@ -194,7 +194,9 @@ if make clean && make -j8 && make install ; then
 		echo;
 		echo "ERROR: Unfortunately, you can't build FFmpeg.";
 		echo;
+	fi;
 else
 	echo;
 	echo "ERROR: Unfortunately, you can't build FFmpeg.";
 	echo;
+fi;
