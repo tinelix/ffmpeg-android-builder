@@ -185,6 +185,7 @@ else
 	echo "Build configuration error."
 	echo;
 	exit 1;
+fi;
 
 if make clean && make -j8 && make install ; then
 	echo;
