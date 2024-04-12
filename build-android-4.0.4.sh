@@ -100,11 +100,11 @@ else
 	if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
-		ANDROID_NDK_GCC="${ANDROID_NDK_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 	elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
 		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
-		ANDROID_NDK_GCC="${ANDROID_NDK_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 	else
 		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
@@ -174,17 +174,21 @@ if [ -f "dos2unix" ]; then
     dos2unix ./fake-pkg-config
 fi;
 
-./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"
-echo;
-echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
-sleep 15s;
-echo;
-echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
+if ./configure $FFMPEG_FLAGS --extra-cflags="$FFMPEG_CFLAGS"; then
+	echo;
+	echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
+	sleep 15s;
+	echo;
+	echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
+else
+	echo;
+	echo "Build configuration error."
+	echo;
+	exit 1;
 
 if make clean && make -j8 && make install ; then
 	echo;
 	echo "Linking FFmpeg libraries...";
-	echo;
 	if ${ANDROID_NDK_TOOLCHAINS}ld \
 		-rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
 		-L${ANDROID_NDK_SYSROOT}/usr/lib \
@@ -205,13 +209,16 @@ if make clean && make -j8 && make install ; then
 		echo;
 		echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
 		echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
+		echo;
 	else
 		echo;
 		echo "ERROR: Unfortunately, you can't build FFmpeg.";
 		echo;
+		exit 1;
 	fi;
 else
 	echo;
 	echo "ERROR: Unfortunately, you can't build FFmpeg.";
 	echo;
+	exit 1;
 fi;
