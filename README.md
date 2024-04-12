@@ -11,7 +11,7 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
                         libass-dev libfreetype6-dev libmp3lame-dev libsdl2-dev libtool \
                         libvdpau-dev libvorbis-dev pkg-config wget zlib1g-dev texinfo
    ```
-3. Download Android NDK (`r5`, `r7b` or `r8e`/`r11c`). \
+3. Download Android NDK (`r5`, `r7b` or `r8e`/`r10e`). \
    <sub>See [NDK r8e download page](http://web.archive.org/web/20130629195058/http://developer.android.com/tools/sdk/ndk/index.html#Downloads) or [list of unsupported NDK versions](https://github.com/android/ndk/wiki/Unsupported-Downloads).</sub>
 5. Clone repo.
    
@@ -27,12 +27,12 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
 -------------------------------------------------------------------------------------------------------------------|
 | FFmpeg version  | NDK version | Supported ABIs   | Supported Android versions   | Tested in Linux distros        |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 4.0.4           | r11c        | armeabi          | Android 2.0 and above        | Debian 8.11.0                  |
+| 4.0.4           | r10e        | armeabi          | Android 2.0 and above        | Debian 8.11.0                  |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 3.1.4           | r11c        | armeabi          | Android 2.0 and above        |                                |
+| 3.1.4           | r10e        | armeabi          | Android 2.0 and above        |                                |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
