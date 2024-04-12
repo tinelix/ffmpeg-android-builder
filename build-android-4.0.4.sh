@@ -174,6 +174,7 @@ if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 		--enable-asm"
 else
 	FFMPEG_FLAGS+=" --disable-x86asm"
+fi;
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
