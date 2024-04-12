@@ -15,7 +15,7 @@
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
 echo "FFmpeg custom builder for Android"
-echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
+echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023-2024"
 echo "Licensed under LGPLv3 or later version.";
 echo "";
 
@@ -58,7 +58,7 @@ elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
 	FFMPEG_TARGET_CPU="armv7";
 	ANDROID_TARGET_ARCH="armeabi-v7a";
 	ANDROID_TOOLCHAIN_CPUABI="arm";
-	ANDROID_TARGET_API=8;
+	ANDROID_TARGET_API=5;
 elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	FFMPEG_TARGET_ARCH="aarch64";
 	FFMPEG_TARGET_CPU="armv8-a";
@@ -151,13 +151,11 @@ FFMPEG_FLAGS="--target-os=linux \
 		--enable-inline-asm \
 		--enable-optimizations"
 
-if [ -z "$FFMPEG_GNUTLS" ]; then
-	echo "[WARNING] FFMPEG_GNUTLS variable is not defined."
+if [ -z "$FFMPEG_ST" ]; then
+	echo "[WARNING] FFMPEG_ST variable is not defined."
 	echo "          Streaming playback may be limited.";
-
-else
-	FFMPEG_FLAGS+=" --enable-gnutls"
-fi
+	FFMPEG_FLAGS+=" --disable-securetransport"
+fi;
 
 cd ffmpeg-4.0.4
 
