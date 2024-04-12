@@ -77,6 +77,9 @@ FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
 		-fdiagnostics-color=always \
 		-DANDROID -DNDEBUG"
 
+FFMPEG_TARGET_OS="android"
+
+
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 else
@@ -97,7 +100,7 @@ else
 	fi;
 fi
 
-FFMPEG_FLAGS="--target-os=linux \
+FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--prefix=./android/${ANDROID_TARGET_ARCH} \
 		--disable-everything \
 		--enable-cross-compile \
