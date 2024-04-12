@@ -131,8 +131,6 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--enable-avutil \
 		--enable-swscale \
 		--enable-avfilter \
-		--enable-yasm \
-		--enable-asm \
 		--disable-programs \
 		--disable-ffmpeg \
 		--disable-ffplay \
@@ -170,6 +168,12 @@ if [ -z "$FFMPEG_ST" ]; then
 fi;
 
 cd ffmpeg-4.0.4
+
+if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
+	FFMPEG_FLAGS+=" --enable-yasm \
+		--enable-asm"
+else
+	FFMPEG_FLAGS+=" --disable-x86asm"
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
