@@ -70,22 +70,17 @@ else
 	exit 1;
 fi;
 
-if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
 		-finline-limit=300 -ffast-math \
 		-fstrict-aliasing -Werror=strict-aliasing \
 		-Wno-psabi \
 		-fdiagnostics-color=always \
 		-DANDROID -DNDEBUG"
+
+if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 else
-	FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
-		-finline-limit=300 -ffast-math \
-		-fstrict-aliasing -Werror=strict-aliasing \
-		-Wno-psabi \
-		-fdiagnostics-color=always \
-		-msoft-float \
-		-DANDROID -DNDEBUG"
+	FFMPEG_CFLAGS+=" -msoft-float"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 fi;
 
@@ -170,32 +165,36 @@ echo "Build starts in 15 seconds. Wait or press CTRL+Z for cancel.";
 sleep 15s;
 echo;
 echo "Building FFmpeg for ${ANDROID_TARGET_ARCH}...";
-make clean
-make -j8
-make install
 
-echo;
-echo "Linking FFmpeg libraries...";
-
-${ANDROID_NDK_TOOLCHAINS}ld \
--rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
--L${ANDROID_NDK_SYSROOT}/usr/lib \
--L./android/${ANDROID_TARGET_ARCH}/lib \
--soname libffmpeg.so -shared -nostdlib -Bsymbolic --whole-archive --no-undefined -o \
-./android/${ANDROID_TARGET_ARCH}/libffmpeg.so \
-libavcodec/libavcodec.a \
-libavfilter/libavfilter.a \
-libswresample/libswresample.a \
-libavformat/libavformat.a \
-libavutil/libavutil.a \
-libswscale/libswscale.a \
--lc -lm -lz -ldl -llog --dynamic-linker=/system/bin/linker \
-${ANDROID_NDK_GCC}/libgcc.a
-
-echo;
-echo "FFmpeg successfully builded!";
-echo;
-echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
-echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
-
-
+if make clean && make -j8 && make install ; then
+	echo;
+	echo "Linking FFmpeg libraries...";
+	echo;
+	if ${ANDROID_NDK_TOOLCHAINS}ld \
+		-rpath-link=${ANDROID_NDK_SYSROOT}/usr/lib \
+		-L${ANDROID_NDK_SYSROOT}/usr/lib \
+		-L./android/${ANDROID_TARGET_ARCH}/lib \
+		-soname libffmpeg.so -shared -nostdlib -Bsymbolic --whole-archive --no-undefined -o \
+		./android/${ANDROID_TARGET_ARCH}/libffmpeg.so \
+		libavcodec/libavcodec.a \
+		libavfilter/libavfilter.a \
+		libswresample/libswresample.a \
+		libavformat/libavformat.a \
+		libavutil/libavutil.a \
+		libswscale/libswscale.a \
+		-lc -lm -lz -ldl -llog --dynamic-linker=/system/bin/linker \
+		${ANDROID_NDK_GCC}/libgcc.a;
+	then
+		echo;
+		echo "FFmpeg successfully builded!";
+		echo;
+		echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
+		echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
+	else
+		echo;
+		echo "ERROR: Unfortunately, you can't build FFmpeg.";
+		echo;
+else
+	echo;
+	echo "ERROR: Unfortunately, you can't build FFmpeg.";
+	echo;
