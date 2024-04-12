@@ -88,6 +88,8 @@ FFMPEG_TARGET_OS="android"
 
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
+elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
+	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86"
 else
 	FFMPEG_CFLAGS+=" -msoft-float"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
