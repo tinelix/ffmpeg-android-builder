@@ -15,7 +15,7 @@
 #  Source code: https://github.com/tinelix/ffmpeg-android-builder
 
 echo "FFmpeg custom builder for Android"
-echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023"
+echo "Copyright (c) Dmitry Tretyakov (aka. Tinelix), 2023-2024"
 echo "Licensed under LGPLv3 or later version.";
 echo "";
 
@@ -151,13 +151,11 @@ FFMPEG_FLAGS="--target-os=linux \
 		--enable-inline-asm \
 		--enable-optimizations"
 
-if [ -z "$FFMPEG_GNUTLS" ]; then
-	echo "[WARNING] FFMPEG_GNUTLS variable is not defined."
+if [ -z "$FFMPEG_ST" ]; then
+	echo "[WARNING] FFMPEG_ST variable is not defined."
 	echo "          Streaming playback may be limited.";
-
-else
-	FFMPEG_FLAGS+=" --enable-gnutls"
-fi
+	FFMPEG_FLAGS+=" --disable-securetransport"
+fi;
 
 cd ffmpeg-4.0.4
 
@@ -199,3 +197,5 @@ echo "FFmpeg successfully builded!";
 echo;
 echo "Copy *.so file to '[app module]/src/main/jniLibs' of your Android project."
 echo "*.so file and headers placed in './ffmpeg/android/${ANDROID_TARGET_ARCH}' directory."
+
+
