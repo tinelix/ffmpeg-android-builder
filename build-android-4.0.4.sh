@@ -165,8 +165,6 @@ if [ -z "$FFMPEG_ST" ]; then
 	echo "[WARNING] FFMPEG_ST variable is not defined."
 	echo "          Streaming playback may be limited.";
 	FFMPEG_FLAGS+=" --disable-securetransport"
-else
-
 fi;
 
 cd ffmpeg-4.0.4
