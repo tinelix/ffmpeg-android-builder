@@ -151,7 +151,7 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-iconv \
 		--disable-debug \
 		--enable-network \
-		--enable-protocol=file,http,async \
+		--enable-protocol=tcp,file,http,async,tls \
 		--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
 		--enable-demuxer=flv,mp3,mp4,ogg,data \
 		--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
@@ -165,6 +165,8 @@ if [ -z "$FFMPEG_ST" ]; then
 	echo "[WARNING] FFMPEG_ST variable is not defined."
 	echo "          Streaming playback may be limited.";
 	FFMPEG_FLAGS+=" --disable-securetransport"
+else
+
 fi;
 
 cd ffmpeg-4.0.4
