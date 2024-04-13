@@ -54,14 +54,14 @@ if [ $FFMPEG_INPUT_ARCH == "armv6" ]; then
 	ANDROID_TOOLCHAIN_CPUABI="arm";
 	ANDROID_TARGET_API=5;
 elif [ $FFMPEG_INPUT_ARCH == "armv7" ]; then
-	FFMPEG_TARGET_ARCH="armv7";
-	FFMPEG_TARGET_CPU="armv7";
+	FFMPEG_TARGET_ARCH="arm";
+	FFMPEG_TARGET_CPU="armv7-a";
 	ANDROID_TARGET_ARCH="armeabi-v7a";
 	ANDROID_TOOLCHAIN_CPUABI="arm";
 	ANDROID_TARGET_API=5;
 elif [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_TARGET_ARCH="aarch64";
-	FFMPEG_TARGET_CPU="armv8-a";
+	FFMPEG_TARGET_ARCH="arm64";
+	FFMPEG_TARGET_CPU="cortex-a57";
 	ANDROID_TARGET_ARCH="arm64-v8a";
 	ANDROID_TOOLCHAIN_CPUABI="aarch64";
 	ANDROID_TARGET_API=21;
@@ -87,11 +87,12 @@ FFMPEG_TARGET_OS="linux"
 
 
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
+	FFMPEG_CFLAGS+=" -march=armv8-a"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
+	FFMPEG_CFLAGS+=" -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86"
 else
-	FFMPEG_CFLAGS+=" -msoft-float"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 fi;
 
@@ -173,8 +174,12 @@ if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
 		--enable-asm"
 else
-	FFMPEG_FLAGS+=" --disable-x86asm"
+	FFMPEG_FLAGS+=" --disable-yasm"
 fi;
+
+# Build workaround special for FFmpeg 3.1.x
+rm -rf ./compat/strtod.o
+rm -rf ./compat/strtod.d
 
 if [ -f "dos2unix" ]; then
     dos2unix ./configure
