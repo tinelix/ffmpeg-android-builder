@@ -83,7 +83,7 @@ FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
 		-fdiagnostics-color=always \
 		-DANDROID -DNDEBUG"
 
-FFMPEG_TARGET_OS="android"
+FFMPEG_TARGET_OS="linux"
 
 
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
