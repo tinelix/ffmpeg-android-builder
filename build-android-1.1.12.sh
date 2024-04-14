@@ -77,12 +77,11 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+FFMPEG_CFLAGS="-std=c99 -O3 -Wall -pipe -fPIC -fasm \
 		-finline-limit=300 -ffast-math \
-		-fstrict-aliasing -Werror=strict-aliasing \
+		-fno-strict-aliasing -Werror=strict-aliasing \
 		-Wno-psabi \
-		-fdiagnostics-color=always \
-		-DANDROID -DNDEBUG"
+		-DANDROID -DHAVE_SYS_UIO_H=1 -DNDEBUG"
 
 FFMPEG_TARGET_OS="linux"
 
