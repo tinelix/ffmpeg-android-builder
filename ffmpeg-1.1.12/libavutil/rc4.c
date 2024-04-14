@@ -20,16 +20,11 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-
-#include "error.h"
-#include "macros.h"
-#include "mem.h"
+#include "avutil.h"
+#include "common.h"
 #include "rc4.h"
 
-AVRC4 *av_rc4_alloc(void)
-{
-    return av_mallocz(sizeof(struct AVRC4));
-}
+typedef struct AVRC4 AVRC4;
 
 int av_rc4_init(AVRC4 *r, const uint8_t *key, int key_bits, int decrypt) {
     int i, j;
@@ -37,7 +32,7 @@ int av_rc4_init(AVRC4 *r, const uint8_t *key, int key_bits, int decrypt) {
     uint8_t *state = r->state;
     int keylen = key_bits >> 3;
     if (key_bits & 7)
-        return AVERROR(EINVAL);
+        return -1;
     for (i = 0; i < 256; i++)
         state[i] = i;
     y = 0;

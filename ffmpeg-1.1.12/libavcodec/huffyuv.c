@@ -1,9 +1,9 @@
 /*
  * huffyuv codec for libavcodec
  *
- * Copyright (c) 2002-2014 Michael Niedermayer <michaelni@gmx.at>
+ * Copyright (c) 2002-2003 Michael Niedermayer <michaelni@gmx.at>
  *
- * see https://multimedia.cx/huffyuv.txt for a description of
+ * see http://www.pcisys.net/~melanson/codecs/huffyuv.txt for a description of
  * the algorithm used
  *
  * This file is part of FFmpeg.
@@ -28,34 +28,71 @@
  * huffyuv codec for libavcodec.
  */
 
-#include <stddef.h>
 #include <stdint.h>
 
-#include "libavutil/error.h"
-#include "libavutil/log.h"
-#include "libavutil/macros.h"
+#include "libavutil/mem.h"
 
+#include "avcodec.h"
+#include "dsputil.h"
 #include "huffyuv.h"
 
-int ff_huffyuv_generate_bits_table(uint32_t *dst, const uint8_t *len_table, int n)
+int ff_huffyuv_generate_bits_table(uint32_t *dst, const uint8_t *len_table)
 {
-    int lens[33] = { 0 };
-    uint32_t codes[33];
+    int len, index;
+    uint32_t bits = 0;
 
-    for (int i = 0; i < n; i++)
-        lens[len_table[i]]++;
-
-    codes[32] = 0;
-    for (int i = FF_ARRAY_ELEMS(lens) - 1; i > 0; i--) {
-        if ((lens[i] + codes[i]) & 1) {
-            av_log(NULL, AV_LOG_ERROR, "Error generating huffman table\n");
-            return AVERROR_INVALIDDATA;
+    for (len = 32; len > 0; len--) {
+        for (index = 0; index < 256; index++) {
+            if (len_table[index] == len)
+                dst[index] = bits++;
         }
-        codes[i - 1] = (lens[i] + codes[i]) >> 1;
-    }
-    for (int i = 0; i < n; i++) {
-        if (len_table[i])
-            dst[i] = codes[len_table[i]]++;
+        if (bits & 1) {
+            av_log(NULL, AV_LOG_ERROR, "Error generating huffman table\n");
+            return -1;
+        }
+        bits >>= 1;
     }
     return 0;
+}
+
+av_cold int ff_huffyuv_alloc_temp(HYuvContext *s)
+{
+    int i;
+
+    if (s->bitstream_bpp<24) {
+        for (i=0; i<3; i++) {
+            s->temp[i]= av_malloc(s->width + 16);
+            if (!s->temp[i])
+                return AVERROR(ENOMEM);
+        }
+    } else {
+        s->temp[0]= av_mallocz(4*s->width + 16);
+        if (!s->temp[0])
+            return AVERROR(ENOMEM);
+    }
+    return 0;
+}
+
+av_cold void ff_huffyuv_common_init(AVCodecContext *avctx)
+{
+    HYuvContext *s = avctx->priv_data;
+
+    s->avctx = avctx;
+    s->flags = avctx->flags;
+
+    ff_dsputil_init(&s->dsp, avctx);
+
+    s->width = avctx->width;
+    s->height = avctx->height;
+
+    av_assert1(s->width > 0 && s->height > 0);
+}
+
+av_cold void ff_huffyuv_common_end(HYuvContext *s)
+{
+    int i;
+
+    for(i = 0; i < 3; i++) {
+        av_freep(&s->temp[i]);
+    }
 }

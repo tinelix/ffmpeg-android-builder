@@ -25,11 +25,9 @@
  * @author Bartlomiej Wolowiec
  */
 
-#include <stdint.h>
-#include "libavutil/avassert.h"
-#include "libavutil/macros.h"
-#include "lzw.h"
+#include "avcodec.h"
 #include "put_bits.h"
+#include "lzw.h"
 
 #define LZW_MAXBITS 12
 #define LZW_SIZTABLE (1<<LZW_MAXBITS)
@@ -61,7 +59,7 @@ typedef struct LZWEncodeState {
     int output_bytes;        ///< Number of written bytes
     int last_code;           ///< Value of last output code or LZW_PREFIX_EMPTY
     enum FF_LZW_MODES mode;  ///< TIFF or GIF
-    int little_endian;       ///< GIF is LE while TIFF is BE
+    void (*put_bits)(PutBitContext *, int, unsigned); ///< GIF is LE while TIFF is BE
 }LZWEncodeState;
 
 
@@ -113,11 +111,8 @@ static inline int hashOffset(const int head)
  */
 static inline void writeCode(LZWEncodeState * s, int c)
 {
-    av_assert2(0 <= c && c < 1 << s->bits);
-    if (s->little_endian)
-        put_bits_le(&s->pb, s->bits, c);
-    else
-        put_bits(&s->pb, s->bits, c);
+    assert(0 <= c && c < 1 << s->bits);
+    s->put_bits(&s->pb, s->bits, c);
 }
 
 
@@ -190,7 +185,7 @@ static void clearTable(LZWEncodeState * s)
  * @return Number of bytes written
  */
 static int writtenBytes(LZWEncodeState *s){
-    int ret = put_bytes_count(&s->pb, 0);
+    int ret = put_bits_count(&s->pb) >> 3;
     ret -= s->output_bytes;
     s->output_bytes += ret;
     return ret;
@@ -204,20 +199,21 @@ static int writtenBytes(LZWEncodeState *s){
  * @param maxbits Maximum length of code
  */
 void ff_lzw_encode_init(LZWEncodeState *s, uint8_t *outbuf, int outsize,
-                        int maxbits, enum FF_LZW_MODES mode, int little_endian)
+                        int maxbits, enum FF_LZW_MODES mode,
+                        void (*lzw_put_bits)(PutBitContext *, int, unsigned))
 {
     s->clear_code = 256;
     s->end_code = 257;
     s->maxbits = maxbits;
     init_put_bits(&s->pb, outbuf, outsize);
     s->bufsize = outsize;
-    av_assert0(s->maxbits >= 9 && s->maxbits <= LZW_MAXBITS);
+    assert(s->maxbits >= 9 && s->maxbits <= LZW_MAXBITS);
     s->maxcode = 1 << s->maxbits;
     s->output_bytes = 0;
     s->last_code = LZW_PREFIX_EMPTY;
     s->bits = 9;
     s->mode = mode;
-    s->little_endian = little_endian;
+    s->put_bits = lzw_put_bits;
 }
 
 /**
@@ -260,22 +256,13 @@ int ff_lzw_encode(LZWEncodeState * s, const uint8_t * inbuf, int insize)
  * @param s LZW state
  * @return Number of bytes written or -1 on error
  */
-int ff_lzw_encode_flush(LZWEncodeState *s)
+int ff_lzw_encode_flush(LZWEncodeState *s,
+                        void (*lzw_flush_put_bits)(PutBitContext *))
 {
     if (s->last_code != -1)
         writeCode(s, s->last_code);
     writeCode(s, s->end_code);
-    if (s->little_endian) {
-        if (s->mode == FF_LZW_GIF)
-            put_bits_le(&s->pb, 1, 0);
-
-        flush_put_bits_le(&s->pb);
-    } else {
-        if (s->mode == FF_LZW_GIF)
-            put_bits(&s->pb, 1, 0);
-
-        flush_put_bits(&s->pb);
-    }
+    lzw_flush_put_bits(&s->pb);
     s->last_code = -1;
 
     return writtenBytes(s);

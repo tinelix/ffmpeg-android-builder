@@ -60,7 +60,7 @@
  */
 
 #include "libavutil/common.h"
-#include "fdctdsp.h"
+#include "dsputil.h"
 
 #include "bit_depth_template.c"
 
@@ -69,7 +69,12 @@
 #define GLOBAL(x) x
 #define RIGHT_SHIFT(x, n) ((x) >> (n))
 #define MULTIPLY16C16(var,const) ((var)*(const))
+
+#if 1 //def USE_ACCURATE_ROUNDING
 #define DESCALE(x,n)  RIGHT_SHIFT((x) + (1 << ((n) - 1)), n)
+#else
+#define DESCALE(x,n)  RIGHT_SHIFT(x, n)
+#endif
 
 
 /*
@@ -179,12 +184,12 @@
 #endif
 
 
-static av_always_inline void FUNC(row_fdct)(int16_t *data)
+static av_always_inline void FUNC(row_fdct)(DCTELEM *data)
 {
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1, z2, z3, z4, z5;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   /* Pass 1: process rows. */
@@ -211,13 +216,13 @@ static av_always_inline void FUNC(row_fdct)(int16_t *data)
     tmp11 = tmp1 + tmp2;
     tmp12 = tmp1 - tmp2;
 
-    dataptr[0] = (int16_t) ((tmp10 + tmp11) * (1 << PASS1_BITS));
-    dataptr[4] = (int16_t) ((tmp10 - tmp11) * (1 << PASS1_BITS));
+    dataptr[0] = (DCTELEM) ((tmp10 + tmp11) << PASS1_BITS);
+    dataptr[4] = (DCTELEM) ((tmp10 - tmp11) << PASS1_BITS);
 
     z1 = MULTIPLY(tmp12 + tmp13, FIX_0_541196100);
-    dataptr[2] = (int16_t) DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865),
+    dataptr[2] = (DCTELEM) DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865),
                                    CONST_BITS-PASS1_BITS);
-    dataptr[6] = (int16_t) DESCALE(z1 + MULTIPLY(tmp12, - FIX_1_847759065),
+    dataptr[6] = (DCTELEM) DESCALE(z1 + MULTIPLY(tmp12, - FIX_1_847759065),
                                    CONST_BITS-PASS1_BITS);
 
     /* Odd part per figure 8 --- note paper omits factor of sqrt(2).
@@ -243,10 +248,10 @@ static av_always_inline void FUNC(row_fdct)(int16_t *data)
     z3 += z5;
     z4 += z5;
 
-    dataptr[7] = (int16_t) DESCALE(tmp4 + z1 + z3, CONST_BITS-PASS1_BITS);
-    dataptr[5] = (int16_t) DESCALE(tmp5 + z2 + z4, CONST_BITS-PASS1_BITS);
-    dataptr[3] = (int16_t) DESCALE(tmp6 + z2 + z3, CONST_BITS-PASS1_BITS);
-    dataptr[1] = (int16_t) DESCALE(tmp7 + z1 + z4, CONST_BITS-PASS1_BITS);
+    dataptr[7] = (DCTELEM) DESCALE(tmp4 + z1 + z3, CONST_BITS-PASS1_BITS);
+    dataptr[5] = (DCTELEM) DESCALE(tmp5 + z2 + z4, CONST_BITS-PASS1_BITS);
+    dataptr[3] = (DCTELEM) DESCALE(tmp6 + z2 + z3, CONST_BITS-PASS1_BITS);
+    dataptr[1] = (DCTELEM) DESCALE(tmp7 + z1 + z4, CONST_BITS-PASS1_BITS);
 
     dataptr += DCTSIZE;         /* advance pointer to next row */
   }
@@ -257,12 +262,12 @@ static av_always_inline void FUNC(row_fdct)(int16_t *data)
  */
 
 GLOBAL(void)
-FUNC(ff_jpeg_fdct_islow)(int16_t *data)
+FUNC(ff_jpeg_fdct_islow)(DCTELEM *data)
 {
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1, z2, z3, z4, z5;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   FUNC(row_fdct)(data);
@@ -339,12 +344,12 @@ FUNC(ff_jpeg_fdct_islow)(int16_t *data)
  * you do even part two times.
  */
 GLOBAL(void)
-FUNC(ff_fdct248_islow)(int16_t *data)
+FUNC(ff_fdct248_islow)(DCTELEM *data)
 {
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   FUNC(row_fdct)(data);

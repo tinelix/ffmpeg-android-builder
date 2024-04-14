@@ -24,26 +24,36 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/internal.h"
+
+typedef struct AuraDecodeContext {
+    AVCodecContext *avctx;
+    AVFrame frame;
+} AuraDecodeContext;
 
 static av_cold int aura_decode_init(AVCodecContext *avctx)
 {
+    AuraDecodeContext *s = avctx->priv_data;
+
+    s->avctx = avctx;
     /* width needs to be divisible by 4 for this codec to work */
     if (avctx->width & 0x3)
-        return AVERROR(EINVAL);
+        return -1;
     avctx->pix_fmt = AV_PIX_FMT_YUV422P;
+    avcodec_get_frame_defaults(&s->frame);
 
     return 0;
 }
 
-static int aura_decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                             int *got_frame, AVPacket *pkt)
+static int aura_decode_frame(AVCodecContext *avctx,
+                             void *data, int *got_frame,
+                             AVPacket *pkt)
 {
+    AuraDecodeContext *s = avctx->priv_data;
     uint8_t *Y, *U, *V;
     uint8_t val;
-    int x, y, ret;
+    int x, y;
     const uint8_t *buf = pkt->data;
 
     /* prediction error tables (make it clear that they are signed values) */
@@ -52,18 +62,25 @@ static int aura_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     if (pkt->size != 48 + avctx->height * avctx->width) {
         av_log(avctx, AV_LOG_ERROR, "got a buffer with %d bytes when %d were expected\n",
                pkt->size, 48 + avctx->height * avctx->width);
-        return AVERROR_INVALIDDATA;
+        return -1;
     }
 
     /* pixel data starts 48 bytes in, after 3x16-byte tables */
     buf += 48;
 
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
-        return ret;
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
 
-    Y = frame->data[0];
-    U = frame->data[1];
-    V = frame->data[2];
+    s->frame.buffer_hints = FF_BUFFER_HINTS_VALID;
+    s->frame.reference = 0;
+    if (ff_get_buffer(avctx, &s->frame) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
+        return -1;
+    }
+
+    Y = s->frame.data[0];
+    U = s->frame.data[1];
+    V = s->frame.data[2];
 
     /* iterate through each line in the height */
     for (y = 0; y < avctx->height; y++) {
@@ -86,22 +103,35 @@ static int aura_decode_frame(AVCodecContext *avctx, AVFrame *frame,
             Y[1] = Y[ 0] + delta_table[val & 0xF];
             Y   += 2; U++; V++;
         }
-        Y += frame->linesize[0] -  avctx->width;
-        U += frame->linesize[1] - (avctx->width >> 1);
-        V += frame->linesize[2] - (avctx->width >> 1);
+        Y += s->frame.linesize[0] -  avctx->width;
+        U += s->frame.linesize[1] - (avctx->width >> 1);
+        V += s->frame.linesize[2] - (avctx->width >> 1);
     }
 
     *got_frame = 1;
+    *(AVFrame*)data = s->frame;
 
     return pkt->size;
 }
 
-const FFCodec ff_aura2_decoder = {
-    .p.name         = "aura2",
-    CODEC_LONG_NAME("Auravision Aura 2"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AURA2,
+static av_cold int aura_decode_end(AVCodecContext *avctx)
+{
+    AuraDecodeContext *s = avctx->priv_data;
+
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
+
+    return 0;
+}
+
+AVCodec ff_aura2_decoder = {
+    .name           = "aura2",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AURA2,
+    .priv_data_size = sizeof(AuraDecodeContext),
     .init           = aura_decode_init,
-    FF_CODEC_DECODE_CB(aura_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .close          = aura_decode_end,
+    .decode         = aura_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Auravision Aura 2"),
 };

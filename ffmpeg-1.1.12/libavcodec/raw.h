@@ -27,22 +27,15 @@
 #ifndef AVCODEC_RAW_H
 #define AVCODEC_RAW_H
 
-#include "libavutil/pixfmt.h"
+#include "avcodec.h"
+#include "libavutil/internal.h"
 
 typedef struct PixelFormatTag {
     enum AVPixelFormat pix_fmt;
     unsigned int fourcc;
 } PixelFormatTag;
 
-const struct PixelFormatTag *avpriv_get_raw_pix_fmt_tags(void);
-
-enum PixelFormatTagLists {
-    PIX_FMT_LIST_RAW,
-    PIX_FMT_LIST_AVI,
-    PIX_FMT_LIST_MOV,
-};
-
-enum AVPixelFormat avpriv_pix_fmt_find(enum PixelFormatTagLists list,
-                                       unsigned fourcc);
+extern av_export const PixelFormatTag ff_raw_pix_fmt_tags[];
+enum AVPixelFormat ff_find_pix_fmt(const PixelFormatTag *tags, unsigned int fourcc);
 
 #endif /* AVCODEC_RAW_H */

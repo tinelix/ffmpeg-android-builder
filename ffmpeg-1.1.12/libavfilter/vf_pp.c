@@ -25,39 +25,27 @@
  */
 
 #include "libavutil/avassert.h"
-#include "libavutil/mem.h"
 #include "libavutil/opt.h"
-
 #include "internal.h"
-#include "qp_table.h"
-#include "video.h"
 
 #include "libpostproc/postprocess.h"
 
-typedef struct PPFilterContext {
-    const AVClass *class;
-    char *subfilters;
+typedef struct {
     int mode_id;
     pp_mode *modes[PP_QUALITY_MAX + 1];
     void *pp_ctx;
 } PPFilterContext;
 
-#define OFFSET(x) offsetof(PPFilterContext, x)
-#define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption pp_options[] = {
-    { "subfilters", "set postprocess subfilters", OFFSET(subfilters), AV_OPT_TYPE_STRING, {.str="de"}, .flags = FLAGS },
-    { NULL }
-};
-
-AVFILTER_DEFINE_CLASS(pp);
-
-static av_cold int pp_init(AVFilterContext *ctx)
+static av_cold int pp_init(AVFilterContext *ctx, const char *args)
 {
     int i;
     PPFilterContext *pp = ctx->priv;
 
+    if (!args || !*args)
+        args = "de";
+
     for (i = 0; i <= PP_QUALITY_MAX; i++) {
-        pp->modes[i] = pp_get_mode_by_name_and_quality(pp->subfilters, i);
+        pp->modes[i] = pp_get_mode_by_name_and_quality(args, i);
         if (!pp->modes[i])
             return AVERROR_EXTERNAL;
     }
@@ -77,16 +65,18 @@ static int pp_process_command(AVFilterContext *ctx, const char *cmd, const char 
     return AVERROR(ENOSYS);
 }
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUVJ420P,
-    AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUVJ422P,
-    AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_GBRP,
-    AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUVJ444P,
-    AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUVJ440P,
-    AV_PIX_FMT_GRAY8,
-    AV_PIX_FMT_NONE
-};
+static int pp_query_formats(AVFilterContext *ctx)
+{
+    static const enum PixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUVJ420P,
+        AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUVJ422P,
+        AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUVJ444P,
+        AV_PIX_FMT_NONE
+    };
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return 0;
+}
 
 static int pp_config_props(AVFilterLink *inlink)
 {
@@ -94,17 +84,13 @@ static int pp_config_props(AVFilterLink *inlink)
     PPFilterContext *pp = inlink->dst->priv;
 
     switch (inlink->format) {
-    case AV_PIX_FMT_GRAY8:
     case AV_PIX_FMT_YUVJ420P:
     case AV_PIX_FMT_YUV420P: flags |= PP_FORMAT_420; break;
     case AV_PIX_FMT_YUVJ422P:
     case AV_PIX_FMT_YUV422P: flags |= PP_FORMAT_422; break;
     case AV_PIX_FMT_YUV411P: flags |= PP_FORMAT_411; break;
-    case AV_PIX_FMT_GBRP:
     case AV_PIX_FMT_YUVJ444P:
     case AV_PIX_FMT_YUV444P: flags |= PP_FORMAT_444; break;
-    case AV_PIX_FMT_YUVJ440P:
-    case AV_PIX_FMT_YUV440P: flags |= PP_FORMAT_440; break;
     default: av_assert0(0);
     }
 
@@ -114,45 +100,32 @@ static int pp_config_props(AVFilterLink *inlink)
     return 0;
 }
 
-static int pp_filter_frame(AVFilterLink *inlink, AVFrame *inbuf)
+static int pp_filter_frame(AVFilterLink *inlink, AVFilterBufferRef *inbuf)
 {
     AVFilterContext *ctx = inlink->dst;
     PPFilterContext *pp = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
     const int aligned_w = FFALIGN(outlink->w, 8);
     const int aligned_h = FFALIGN(outlink->h, 8);
-    AVFrame *outbuf;
-    int qstride = 0;
-    int8_t *qp_table = NULL;
-    int ret;
+    AVFilterBufferRef *outbuf;
 
-    outbuf = ff_get_video_buffer(outlink, aligned_w, aligned_h);
+    outbuf = ff_get_video_buffer(outlink, AV_PERM_WRITE, aligned_w, aligned_h);
     if (!outbuf) {
-        av_frame_free(&inbuf);
+        avfilter_unref_buffer(inbuf);
         return AVERROR(ENOMEM);
     }
-    av_frame_copy_props(outbuf, inbuf);
-    outbuf->width  = inbuf->width;
-    outbuf->height = inbuf->height;
-
-    ret = ff_qp_table_extract(inbuf, &qp_table, &qstride, NULL, NULL);
-    if (ret < 0) {
-        av_frame_free(&inbuf);
-        av_frame_free(&outbuf);
-        return ret;
-    }
+    avfilter_copy_buffer_ref_props(outbuf, inbuf);
 
     pp_postprocess((const uint8_t **)inbuf->data, inbuf->linesize,
                    outbuf->data,                 outbuf->linesize,
                    aligned_w, outlink->h,
-                   qp_table,
-                   qstride,
+                   outbuf->video->qp_table,
+                   outbuf->video->qp_table_linesize,
                    pp->modes[pp->mode_id],
                    pp->pp_ctx,
-                   outbuf->pict_type | (qp_table ? PP_PICT_TYPE_QP2 : 0));
+                   outbuf->video->pict_type);
 
-    av_frame_free(&inbuf);
-    av_freep(&qp_table);
+    avfilter_unref_buffer(inbuf);
     return ff_filter_frame(outlink, outbuf);
 }
 
@@ -173,19 +146,27 @@ static const AVFilterPad pp_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = pp_config_props,
         .filter_frame = pp_filter_frame,
+        .min_perms    = AV_PERM_READ,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_pp = {
+static const AVFilterPad pp_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter avfilter_vf_pp = {
     .name            = "pp",
     .description     = NULL_IF_CONFIG_SMALL("Filter video using libpostproc."),
     .priv_size       = sizeof(PPFilterContext),
     .init            = pp_init,
     .uninit          = pp_uninit,
-    FILTER_INPUTS(pp_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats   = pp_query_formats,
+    .inputs          = pp_inputs,
+    .outputs         = pp_outputs,
     .process_command = pp_process_command,
-    .priv_class      = &pp_class,
-    .flags           = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
 };

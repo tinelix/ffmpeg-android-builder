@@ -22,13 +22,13 @@
 #include <celt/celt.h>
 #include <celt/celt_header.h>
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/intreadwrite.h"
 
 struct libcelt_context {
     CELTMode *mode;
     CELTDecoder *dec;
+    AVFrame frame;
     int discard;
 };
 
@@ -62,13 +62,13 @@ static av_cold int libcelt_dec_init(AVCodecContext *c)
     struct libcelt_context *celt = c->priv_data;
     int err;
 
-    if (!c->ch_layout.nb_channels || !c->frame_size ||
-        c->frame_size > INT_MAX / sizeof(int16_t) / c->ch_layout.nb_channels)
+    if (!c->channels || !c->frame_size ||
+        c->frame_size > INT_MAX / sizeof(int16_t) / c->channels)
         return AVERROR(EINVAL);
     celt->mode = celt_mode_create(c->sample_rate, c->frame_size, &err);
     if (!celt->mode)
         return ff_celt_error_to_averror(err);
-    celt->dec = celt_decoder_create_custom(celt->mode, c->ch_layout.nb_channels, &err);
+    celt->dec = celt_decoder_create_custom(celt->mode, c->channels, &err);
     if (!celt->dec) {
         celt_mode_destroy(celt->mode);
         return ff_celt_error_to_averror(err);
@@ -91,6 +91,8 @@ static av_cold int libcelt_dec_init(AVCodecContext *c)
                    version, lib_version);
     }
     c->sample_fmt = AV_SAMPLE_FMT_S16;
+    avcodec_get_frame_defaults(&celt->frame);
+    c->coded_frame = &celt->frame;
     return 0;
 }
 
@@ -103,40 +105,42 @@ static av_cold int libcelt_dec_close(AVCodecContext *c)
     return 0;
 }
 
-static int libcelt_dec_decode(AVCodecContext *c, AVFrame *frame,
+static int libcelt_dec_decode(AVCodecContext *c, void *frame,
                               int *got_frame_ptr, AVPacket *pkt)
 {
     struct libcelt_context *celt = c->priv_data;
     int err;
     int16_t *pcm;
 
-    frame->nb_samples = c->frame_size;
-    if ((err = ff_get_buffer(c, frame, 0)) < 0)
+    celt->frame.nb_samples = c->frame_size;
+    err = ff_get_buffer(c, &celt->frame);
+    if (err < 0) {
+        av_log(c, AV_LOG_ERROR, "get_buffer() failed\n");
         return err;
-    pcm = (int16_t *)frame->data[0];
+    }
+    pcm = (int16_t *)celt->frame.data[0];
     err = celt_decode(celt->dec, pkt->data, pkt->size, pcm, c->frame_size);
     if (err < 0)
         return ff_celt_error_to_averror(err);
     if (celt->discard) {
-        frame->nb_samples -= celt->discard;
-        memmove(pcm, pcm + celt->discard * c->ch_layout.nb_channels,
-                frame->nb_samples * c->ch_layout.nb_channels * sizeof(int16_t));
+        celt->frame.nb_samples -= celt->discard;
+        memmove(pcm, pcm + celt->discard * c->channels,
+                celt->frame.nb_samples * c->channels * sizeof(int16_t));
         celt->discard = 0;
     }
     *got_frame_ptr = 1;
+    *(AVFrame *)frame = celt->frame;
     return pkt->size;
 }
 
-const FFCodec ff_libcelt_decoder = {
-    .p.name         = "libcelt",
-    CODEC_LONG_NAME("Xiph CELT decoder using libcelt"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_CELT,
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .p.wrapper_name = "libcelt",
-    .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE,
+AVCodec ff_libcelt_decoder = {
+    .name           = "libcelt",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_CELT,
     .priv_data_size = sizeof(struct libcelt_context),
     .init           = libcelt_dec_init,
     .close          = libcelt_dec_close,
-    FF_CODEC_DECODE_CB(libcelt_dec_decode),
+    .decode         = libcelt_dec_decode,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Xiph CELT decoder using libcelt"),
 };

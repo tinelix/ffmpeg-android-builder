@@ -20,22 +20,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "internal.h"
 #include "bytestream.h"
 
 static av_cold int encode_init(AVCodecContext *avctx)
 {
-    int aligned_width = FFALIGN(avctx->width,
-                                avctx->codec_id == AV_CODEC_ID_R10K ? 1 : 64);
+    avctx->coded_frame = avcodec_alloc_frame();
 
-    avctx->bits_per_coded_sample = 32;
-    if (avctx->width > 0)
-        avctx->bit_rate = ff_guess_coded_bitrate(avctx) * aligned_width / avctx->width;
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
 
     return 0;
 }
@@ -47,31 +41,29 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     int aligned_width = FFALIGN(avctx->width,
                                 avctx->codec_id == AV_CODEC_ID_R10K ? 1 : 64);
     int pad = (aligned_width - avctx->width) * 4;
-    const uint8_t *srcr_line, *srcg_line, *srcb_line;
+    uint8_t *src_line;
     uint8_t *dst;
 
-    ret = ff_get_encode_buffer(avctx, pkt, 4 * aligned_width * avctx->height, 0);
-    if (ret < 0)
+    if ((ret = ff_alloc_packet2(avctx, pkt, 4 * aligned_width * avctx->height)) < 0)
         return ret;
 
-    srcg_line = pic->data[0];
-    srcb_line = pic->data[1];
-    srcr_line = pic->data[2];
+    avctx->coded_frame->reference = 0;
+    avctx->coded_frame->key_frame = 1;
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
+    src_line = pic->data[0];
     dst = pkt->data;
 
     for (i = 0; i < avctx->height; i++) {
-        const uint16_t *srcr = (const uint16_t *)srcr_line;
-        const uint16_t *srcg = (const uint16_t *)srcg_line;
-        const uint16_t *srcb = (const uint16_t *)srcb_line;
+        uint16_t *src = (uint16_t *)src_line;
         for (j = 0; j < avctx->width; j++) {
             uint32_t pixel;
-            unsigned r = *srcr++;
-            unsigned g = *srcg++;
-            unsigned b = *srcb++;
+            uint16_t r = *src++ >> 6;
+            uint16_t g = *src++ >> 6;
+            uint16_t b = *src++ >> 4;
             if (avctx->codec_id == AV_CODEC_ID_R210)
-                pixel = (r << 20) | (g << 10) | b;
+                pixel = (r << 20) | (g << 10) | b >> 2;
             else
-                pixel = (r << 22) | (g << 12) | (b << 2);
+                pixel = (r << 22) | (g << 12) | b;
             if (avctx->codec_id == AV_CODEC_ID_AVRP)
                 bytestream_put_le32(&dst, pixel);
             else
@@ -79,50 +71,54 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         }
         memset(dst, 0, pad);
         dst += pad;
-        srcr_line += pic->linesize[2];
-        srcg_line += pic->linesize[0];
-        srcb_line += pic->linesize[1];
+        src_line += pic->linesize[0];
     }
 
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
     return 0;
 }
 
-static const enum AVPixelFormat pix_fmt[] = { AV_PIX_FMT_GBRP10, AV_PIX_FMT_NONE };
+static av_cold int encode_close(AVCodecContext *avctx)
+{
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
 
 #if CONFIG_R210_ENCODER
-const FFCodec ff_r210_encoder = {
-    .p.name         = "r210",
-    CODEC_LONG_NAME("Uncompressed RGB 10-bit"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_R210,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_r210_encoder = {
+    .name           = "r210",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_R210,
     .init           = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts     = pix_fmt,
+    .encode2        = encode_frame,
+    .close          = encode_close,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_RGB48, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("Uncompressed RGB 10-bit"),
 };
 #endif
 #if CONFIG_R10K_ENCODER
-const FFCodec ff_r10k_encoder = {
-    .p.name         = "r10k",
-    CODEC_LONG_NAME("AJA Kona 10-bit RGB Codec"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_R10K,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_r10k_encoder = {
+    .name           = "r10k",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_R10K,
     .init           = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts     = pix_fmt,
+    .encode2        = encode_frame,
+    .close          = encode_close,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_RGB48, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("AJA Kona 10-bit RGB Codec"),
 };
 #endif
 #if CONFIG_AVRP_ENCODER
-const FFCodec ff_avrp_encoder = {
-    .p.name         = "avrp",
-    CODEC_LONG_NAME("Avid 1:1 10-bit RGB Packer"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AVRP,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_avrp_encoder = {
+    .name           = "avrp",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AVRP,
     .init           = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts     = pix_fmt,
+    .encode2        = encode_frame,
+    .close          = encode_close,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_RGB48, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("Avid 1:1 10-bit RGB Packer"),
 };
 #endif

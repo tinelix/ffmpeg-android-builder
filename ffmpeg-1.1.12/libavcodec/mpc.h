@@ -29,12 +29,10 @@
 #ifndef AVCODEC_MPC_H
 #define AVCODEC_MPC_H
 
-#include <stdint.h>
-
 #include "libavutil/lfg.h"
-#include "libavutil/mem_internal.h"
-
-#include "bswapdsp.h"
+#include "avcodec.h"
+#include "get_bits.h"
+#include "dsputil.h"
 #include "mpegaudio.h"
 #include "mpegaudiodsp.h"
 
@@ -52,8 +50,10 @@ typedef struct Band {
 }Band;
 
 typedef struct MPCContext {
-    BswapDSPContext bdsp;
+    AVFrame frame;
+    DSPContext dsp;
     MPADSPContext mpadsp;
+    GetBitContext gb;
     int IS, MSS, gapless;
     int lastframelen;
     int maxbands, last_max_band;
@@ -72,6 +72,7 @@ typedef struct MPCContext {
     DECLARE_ALIGNED(16, int32_t, sb_samples)[MPA_MAX_CHANNELS][36][SBLIMIT];
 } MPCContext;
 
+void ff_mpc_init(void);
 void ff_mpc_dequantize_and_synth(MPCContext *c, int maxband, int16_t **out, int channels);
 
 #endif /* AVCODEC_MPC_H */

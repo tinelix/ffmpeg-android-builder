@@ -1,5 +1,5 @@
 /*
- * MPEG-1/2 common code
+ * MPEG1/2 common code
  * Copyright (c) 2007 Aurelien Jacobs <aurel@gnuage.org>
  *
  * This file is part of FFmpeg.
@@ -22,20 +22,55 @@
 #ifndef AVCODEC_MPEG12_H
 #define AVCODEC_MPEG12_H
 
-#include "libavutil/rational.h"
+#include "mpegvideo.h"
 
-/* Start codes. */
-#define SEQ_END_CODE            0x000001b7
-#define SEQ_START_CODE          0x000001b3
-#define GOP_START_CODE          0x000001b8
-#define PICTURE_START_CODE      0x00000100
-#define SLICE_MIN_START_CODE    0x00000101
-#define SLICE_MAX_START_CODE    0x000001af
-#define EXT_START_CODE          0x000001b5
-#define USER_START_CODE         0x000001b2
+#define DC_VLC_BITS 9
+#define TEX_VLC_BITS 9
 
-void ff_mpeg12_find_best_frame_rate(AVRational frame_rate,
-                                    int *code, int *ext_n, int *ext_d,
-                                    int nonstandard);
+extern VLC ff_dc_lum_vlc;
+extern VLC ff_dc_chroma_vlc;
+
+typedef struct Mpeg1Context {
+    MpegEncContext mpeg_enc_ctx;
+    int mpeg_enc_ctx_allocated; /* true if decoding context allocated */
+    int repeat_field; /* true if we must repeat the field */
+    AVPanScan pan_scan;              /**< some temporary storage for the panscan */
+    int slice_count;
+    int swap_uv;//indicate VCR2
+    int save_aspect_info;
+    int save_width, save_height, save_progressive_seq;
+    AVRational frame_rate_ext;       ///< MPEG-2 specific framerate modificator
+    int sync;                        ///< Did we reach a sync point like a GOP/SEQ/KEYFrame?
+    int tmpgexs;
+    int extradata_decoded;
+} Mpeg1Context;
+
+extern uint8_t ff_mpeg12_static_rl_table_store[2][2][2*MAX_RUN + MAX_LEVEL + 3];
+
+void ff_mpeg12_common_init(MpegEncContext *s);
+void ff_mpeg12_init_vlcs(void);
+
+static inline int decode_dc(GetBitContext *gb, int component)
+{
+    int code, diff;
+
+    if (component == 0) {
+        code = get_vlc2(gb, ff_dc_lum_vlc.table, DC_VLC_BITS, 2);
+    } else {
+        code = get_vlc2(gb, ff_dc_chroma_vlc.table, DC_VLC_BITS, 2);
+    }
+    if (code < 0){
+        av_log(NULL, AV_LOG_ERROR, "invalid dc code at\n");
+        return 0xffff;
+    }
+    if (code == 0) {
+        diff = 0;
+    } else {
+        diff = get_xbits(gb, code);
+    }
+    return diff;
+}
+
+extern int ff_mpeg1_decode_block_intra(MpegEncContext *s, DCTELEM *block, int n);
 
 #endif /* AVCODEC_MPEG12_H */

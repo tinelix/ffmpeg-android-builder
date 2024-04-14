@@ -19,7 +19,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavcodec/startcode.h"
 #include "avformat.h"
 #include "rawdec.h"
 
@@ -28,17 +27,16 @@
 #define CAVS_UNDEF_START_CODE     0x000001b4
 #define CAVS_PIC_PB_START_CODE    0x000001b6
 #define CAVS_VIDEO_EDIT_CODE      0x000001b7
-#define CAVS_PROFILE_JIZHUN       0x20       // AVS1 P2
-#define CAVS_PROFILE_GUANGDIAN    0x48       // AVS1 P16/AVS+
+#define CAVS_PROFILE_JIZHUN       0x20
 
-static int cavsvideo_probe(const AVProbeData *p)
+static int cavsvideo_probe(AVProbeData *p)
 {
     uint32_t code= -1;
     int pic=0, seq=0, slice_pos = 0;
-    const uint8_t *ptr = p->buf, *end = p->buf + p->buf_size;
+    int i;
 
-    while (ptr < end) {
-        ptr = avpriv_find_start_code(ptr, end, &code);
+    for(i=0; i<p->buf_size; i++){
+        code = (code<<8) + p->buf[i];
         if ((code & 0xffffff00) == 0x100) {
             if(code < CAVS_SEQ_START_CODE) {
                 /* slices have to be consecutive */
@@ -51,7 +49,7 @@ static int cavsvideo_probe(const AVProbeData *p)
             if (code == CAVS_SEQ_START_CODE) {
                 seq++;
                 /* check for the only currently supported profile */
-                if (*ptr != CAVS_PROFILE_JIZHUN && *ptr != CAVS_PROFILE_GUANGDIAN)
+                if(p->buf[i+1] != CAVS_PROFILE_JIZHUN)
                     return 0;
             } else if ((code == CAVS_PIC_I_START_CODE) ||
                        (code == CAVS_PIC_PB_START_CODE)) {
@@ -63,8 +61,8 @@ static int cavsvideo_probe(const AVProbeData *p)
         }
     }
     if(seq && seq*9<=pic*10)
-        return AVPROBE_SCORE_EXTENSION+1;
+        return AVPROBE_SCORE_MAX/2;
     return 0;
 }
 
-FF_DEF_RAWVIDEO_DEMUXER(cavsvideo, "raw Chinese AVS (Audio Video Standard)", cavsvideo_probe, "avs", AV_CODEC_ID_CAVS)
+FF_DEF_RAWVIDEO_DEMUXER(cavsvideo, "raw Chinese AVS (Audio Video Standard)", cavsvideo_probe, NULL, AV_CODEC_ID_CAVS)

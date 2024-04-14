@@ -3,20 +3,20 @@
  *
  * Copyright (c) 2010-2011 Maxim Poliakovski
  *
- * This file is part of FFmpeg.
+ * This file is part of Libav.
  *
- * FFmpeg is free software; you can redistribute it and/or
+ * Libav is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
  *
- * FFmpeg is distributed in the hope that it will be useful,
+ * Libav is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with FFmpeg; if not, write to the Free Software
+ * License along with Libav; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
@@ -44,10 +44,29 @@ const uint8_t ff_prores_interlaced_scan[64] = {
     46, 39, 47, 54, 61, 62, 55, 63
 };
 
-const uint8_t ff_prores_dc_codebook[7] = { 0x04, 0x28, 0x28, 0x4D, 0x4D, 0x70, 0x70 };
 
-const uint8_t ff_prores_run_to_cb[16] = { 0x06, 0x06, 0x05, 0x05, 0x04, 0x29,
-        0x29, 0x29, 0x29, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x4C };
+const uint8_t ff_prores_dc_codebook[4] = {
+    0x04, // rice_order = 0, exp_golomb_order = 1, switch_bits = 0
+    0x28, // rice_order = 1, exp_golomb_order = 2, switch_bits = 0
+    0x4D, // rice_order = 2, exp_golomb_order = 3, switch_bits = 1
+    0x70  // rice_order = 3, exp_golomb_order = 4, switch_bits = 0
+};
 
-const uint8_t ff_prores_level_to_cb[10] = { 0x04, 0x0A, 0x05, 0x06, 0x04, 0x28,
-        0x28, 0x28, 0x28, 0x4C };
+const uint8_t ff_prores_ac_codebook[7] = {
+    0x04, // rice_order = 0, exp_golomb_order = 1, switch_bits = 0
+    0x28, // rice_order = 1, exp_golomb_order = 2, switch_bits = 0
+    0x4C, // rice_order = 2, exp_golomb_order = 3, switch_bits = 0
+    0x05, // rice_order = 0, exp_golomb_order = 1, switch_bits = 1
+    0x29, // rice_order = 1, exp_golomb_order = 2, switch_bits = 1
+    0x06, // rice_order = 0, exp_golomb_order = 1, switch_bits = 2
+    0x0A, // rice_order = 0, exp_golomb_order = 2, switch_bits = 2
+};
+
+/**
+ * Lookup tables for adaptive switching between codebooks
+ * according with previous run/level value.
+ */
+const uint8_t ff_prores_run_to_cb_index[16] =
+    { 5, 5, 3, 3, 0, 4, 4, 4, 4, 1, 1, 1, 1, 1, 1, 2 };
+
+const uint8_t ff_prores_lev_to_cb_index[10] = { 0, 6, 3, 5, 0, 1, 1, 1, 1, 2 };

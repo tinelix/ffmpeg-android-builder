@@ -21,8 +21,7 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 static av_cold int y41p_decode_init(AVCodecContext *avctx)
 {
@@ -33,25 +32,39 @@ static av_cold int y41p_decode_init(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_WARNING, "y41p requires width to be divisible by 8.\n");
     }
 
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame) {
+        av_log(avctx, AV_LOG_ERROR, "Could not allocate frame.\n");
+        return AVERROR(ENOMEM);
+    }
+
     return 0;
 }
 
-static int y41p_decode_frame(AVCodecContext *avctx, AVFrame *pic,
+static int y41p_decode_frame(AVCodecContext *avctx, void *data,
                              int *got_frame, AVPacket *avpkt)
 {
-    const uint8_t *src = avpkt->data;
+    AVFrame *pic = avctx->coded_frame;
+    uint8_t *src = avpkt->data;
     uint8_t *y, *u, *v;
-    int i, j, ret;
+    int i, j;
 
-    if (avpkt->size < 3LL * avctx->height * FFALIGN(avctx->width, 8) / 2) {
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
+
+    if (avpkt->size < 1.5 * avctx->height * avctx->width) {
         av_log(avctx, AV_LOG_ERROR, "Insufficient input data.\n");
         return AVERROR(EINVAL);
     }
 
-    if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
-        return ret;
+    pic->reference = 0;
 
-    pic->flags |= AV_FRAME_FLAG_KEY;
+    if (ff_get_buffer(avctx, pic) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Could not allocate buffer.\n");
+        return AVERROR(ENOMEM);
+    }
+
+    pic->key_frame = 1;
     pic->pict_type = AV_PICTURE_TYPE_I;
 
     for (i = avctx->height - 1; i >= 0 ; i--) {
@@ -77,16 +90,28 @@ static int y41p_decode_frame(AVCodecContext *avctx, AVFrame *pic,
     }
 
     *got_frame = 1;
+    *(AVFrame *)data = *pic;
 
     return avpkt->size;
 }
 
-const FFCodec ff_y41p_decoder = {
-    .p.name       = "y41p",
-    CODEC_LONG_NAME("Uncompressed YUV 4:1:1 12-bit"),
-    .p.type       = AVMEDIA_TYPE_VIDEO,
-    .p.id         = AV_CODEC_ID_Y41P,
+static av_cold int y41p_decode_close(AVCodecContext *avctx)
+{
+    if (avctx->coded_frame->data[0])
+        avctx->release_buffer(avctx, avctx->coded_frame);
+
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_y41p_decoder = {
+    .name         = "y41p",
+    .type         = AVMEDIA_TYPE_VIDEO,
+    .id           = AV_CODEC_ID_Y41P,
     .init         = y41p_decode_init,
-    FF_CODEC_DECODE_CB(y41p_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode       = y41p_decode_frame,
+    .close        = y41p_decode_close,
+    .capabilities = CODEC_CAP_DR1,
+    .long_name    = NULL_IF_CONFIG_SMALL("Uncompressed YUV 4:1:1 12-bit"),
 };

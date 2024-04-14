@@ -17,30 +17,26 @@
  */
 
 #include "avformat.h"
-#include "mux.h"
 #include "rawenc.h"
 
 static int jacosub_write_header(AVFormatContext *s)
 {
-    const AVCodecParameters *par = s->streams[0]->codecpar;
+    const AVCodecContext *avctx = s->streams[0]->codec;
 
-    if (par->extradata_size) {
-        avio_write(s->pb, par->extradata, par->extradata_size);
+    if (avctx->extradata_size) {
+        avio_write(s->pb, avctx->extradata, avctx->extradata_size - 1);
+        avio_flush(s->pb);
     }
     return 0;
 }
 
-const FFOutputFormat ff_jacosub_muxer = {
-    .p.name           = "jacosub",
-    .p.long_name      = NULL_IF_CONFIG_SMALL("JACOsub subtitle format"),
-    .p.mime_type      = "text/x-jacosub",
-    .p.extensions     = "jss,js",
-    .p.flags          = AVFMT_TS_NONSTRICT,
-    .p.video_codec    = AV_CODEC_ID_NONE,
-    .p.audio_codec    = AV_CODEC_ID_NONE,
-    .p.subtitle_codec = AV_CODEC_ID_JACOSUB,
-    .flags_internal   = FF_OFMT_FLAG_MAX_ONE_OF_EACH |
-                        FF_OFMT_FLAG_ONLY_DEFAULT_CODECS,
+AVOutputFormat ff_jacosub_muxer = {
+    .name           = "jacosub",
+    .long_name      = NULL_IF_CONFIG_SMALL("JACOsub subtitle format"),
+    .mime_type      = "text/x-jacosub",
+    .extensions     = "jss,js",
     .write_header   = jacosub_write_header,
     .write_packet   = ff_raw_write_packet,
+    .flags          = AVFMT_TS_NONSTRICT,
+    .subtitle_codec = AV_CODEC_ID_JACOSUB,
 };

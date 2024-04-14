@@ -34,25 +34,6 @@
 #   define T @
 #endif
 
-#if HAVE_AS_FUNC
-#   define FUNC
-#else
-#   define FUNC @
-#endif
-
-#if HAVE_AS_FPU_DIRECTIVE
-#   define FPU
-#else
-#   define FPU @
-#endif
-
-#if CONFIG_THUMB && defined(__APPLE__)
-#   define TFUNC
-#else
-#   define TFUNC @
-#endif
-
-#if HAVE_AS_ARCH_DIRECTIVE
 #if   HAVE_NEON
         .arch           armv7-a
 #elif HAVE_ARMV6T2
@@ -62,26 +43,18 @@
 #elif HAVE_ARMV5TE
         .arch           armv5te
 #endif
-#endif
-#if   HAVE_AS_OBJECT_ARCH
-ELF     .object_arch    armv4
-#endif
 
 #if   HAVE_NEON
-FPU     .fpu            neon
-ELF     .eabi_attribute 10, 0           @ suppress Tag_FP_arch
-ELF     .eabi_attribute 12, 0           @ suppress Tag_Advanced_SIMD_arch
+        .fpu            neon
 #elif HAVE_VFP
-FPU     .fpu            vfp
-ELF     .eabi_attribute 10, 0           @ suppress Tag_FP_arch
+        .fpu            vfp
 #endif
 
         .syntax unified
 T       .thumb
 ELF     .eabi_attribute 25, 1           @ Tag_ABI_align_preserved
-ELF     .section .note.GNU-stack,"",%progbits @ Mark stack as non-executable
 
-.macro  function name, export=0, align=2
+.macro  function name, export=0
         .set            .Lpic_idx, 0
         .set            .Lpic_gp, 0
     .macro endfunc
@@ -91,47 +64,27 @@ ELF     .section .note.GNU-stack,"",%progbits @ Mark stack as non-executable
         put_pic         %(.Lpic_idx - 1)
         .noaltmacro
       .endif
-      .if .Lpic_gp
-        .unreq          gp
-      .endif
 ELF     .size   \name, . - \name
-FUNC    .endfunc
+        .endfunc
         .purgem endfunc
     .endm
         .text
-        .align          \align
+        .align          2
     .if \export
         .global EXTERN_ASM\name
-ELF     .type   EXTERN_ASM\name, %function
-FUNC    .func   EXTERN_ASM\name
-TFUNC   .thumb_func EXTERN_ASM\name
 EXTERN_ASM\name:
-    .else
-ELF     .type   \name, %function
-FUNC    .func   \name
-TFUNC   .thumb_func \name
-\name:
     .endif
+ELF     .type   \name, %function
+        .func   \name
+\name:
 .endm
 
-.macro  const   name, align=2, relocate=0
+.macro  const   name, align=2
     .macro endconst
 ELF     .size   \name, . - \name
         .purgem endconst
     .endm
-#if HAVE_SECTION_DATA_REL_RO
-.if \relocate
-        .section        .data.rel.ro
-.else
         .section        .rodata
-.endif
-#elif defined(_WIN32)
-        .section        .rdata
-#elif !defined(__MACH__)
-        .section        .rodata
-#else
-        .const_data
-#endif
         .align          \align
 \name:
 .endm
@@ -202,15 +155,6 @@ T       ldr             \rd, [\rd]
 .endm
 
 .macro  movrelx         rd,  val, gp
-    .ifc \rd,\gp
-        .error      "movrelx needs two distinct registers"
-    .endif
-    .ifc \rd\()_\gp,r12_
-        .warning    "movrelx rd=\rd without explicit set gp"
-    .endif
-    .ifc \rd\()_\gp,ip_
-        .warning    "movrelx rd=\rd without explicit set gp"
-    .endif
 #if CONFIG_PIC && defined(__ELF__)
     .ifnb \gp
       .if .Lpic_gp
@@ -354,7 +298,7 @@ T       sub             \rn, \rn, \rm
 .endm
 
 #if HAVE_VFP_ARGS
-ELF     .eabi_attribute 28, 1
+        .eabi_attribute 28, 1
 #   define VFP
 #   define NOVFP @
 #else

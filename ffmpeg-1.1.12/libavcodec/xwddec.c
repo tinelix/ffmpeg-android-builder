@@ -20,31 +20,38 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <inttypes.h>
-
 #include "libavutil/imgutils.h"
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "xwd.h"
 
-static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
+static av_cold int xwd_decode_init(AVCodecContext *avctx)
+{
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
+
+    return 0;
+}
+
+static int xwd_decode_frame(AVCodecContext *avctx, void *data,
                             int *got_frame, AVPacket *avpkt)
 {
+    AVFrame *p = avctx->coded_frame;
+    const uint8_t *buf = avpkt->data;
+    int i, ret, buf_size = avpkt->size;
     uint32_t version, header_size, vclass, ncolors;
     uint32_t xoffset, be, bpp, lsize, rsize;
     uint32_t pixformat, pixdepth, bunit, bitorder, bpad;
     uint32_t rgb[3];
     uint8_t *ptr;
-    int width, height;
     GetByteContext gb;
-    int ret;
 
-    if (avpkt->size < XWD_HEADER_SIZE)
+    if (buf_size < XWD_HEADER_SIZE)
         return AVERROR_INVALIDDATA;
 
-    bytestream2_init(&gb, avpkt->data, avpkt->size);
+    bytestream2_init(&gb, buf, buf_size);
     header_size = bytestream2_get_be32u(&gb);
 
     version = bytestream2_get_be32u(&gb);
@@ -53,15 +60,15 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
         return AVERROR_INVALIDDATA;
     }
 
-    if (avpkt->size < header_size || header_size < XWD_HEADER_SIZE) {
+    if (buf_size < header_size || header_size < XWD_HEADER_SIZE) {
         av_log(avctx, AV_LOG_ERROR, "invalid header size\n");
         return AVERROR_INVALIDDATA;
     }
 
     pixformat     = bytestream2_get_be32u(&gb);
     pixdepth      = bytestream2_get_be32u(&gb);
-    width         = bytestream2_get_be32u(&gb);
-    height        = bytestream2_get_be32u(&gb);
+    avctx->width  = bytestream2_get_be32u(&gb);
+    avctx->height = bytestream2_get_be32u(&gb);
     xoffset       = bytestream2_get_be32u(&gb);
     be            = bytestream2_get_be32u(&gb);
     bunit         = bytestream2_get_be32u(&gb);
@@ -77,18 +84,11 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
     ncolors       = bytestream2_get_be32u(&gb);
     bytestream2_skipu(&gb, header_size - (XWD_HEADER_SIZE - 20));
 
-    if ((ret = ff_set_dimensions(avctx, width, height)) < 0)
-        return ret;
-
-    av_log(avctx, AV_LOG_DEBUG,
-           "pixformat %"PRIu32", pixdepth %"PRIu32", bunit %"PRIu32", bitorder %"PRIu32", bpad %"PRIu32"\n",
+    av_log(avctx, AV_LOG_DEBUG, "pixformat %d, pixdepth %d, bunit %d, bitorder %d, bpad %d\n",
            pixformat, pixdepth, bunit, bitorder, bpad);
-    av_log(avctx, AV_LOG_DEBUG,
-           "vclass %"PRIu32", ncolors %"PRIu32", bpp %"PRIu32", be %"PRIu32", lsize %"PRIu32", xoffset %"PRIu32"\n",
+    av_log(avctx, AV_LOG_DEBUG, "vclass %d, ncolors %d, bpp %d, be %d, lsize %d, xoffset %d\n",
            vclass, ncolors, bpp, be, lsize, xoffset);
-    av_log(avctx, AV_LOG_DEBUG,
-           "red %0"PRIx32", green %0"PRIx32", blue %0"PRIx32"\n",
-           rgb[0], rgb[1], rgb[2]);
+    av_log(avctx, AV_LOG_DEBUG, "red %0x, green %0x, blue %0x\n", rgb[0], rgb[1], rgb[2]);
 
     if (pixformat > XWD_Z_PIXMAP) {
         av_log(avctx, AV_LOG_ERROR, "invalid pixmap format\n");
@@ -101,7 +101,7 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
     }
 
     if (xoffset) {
-        avpriv_request_sample(avctx, "xoffset %"PRIu32"", xoffset);
+        av_log_ask_for_sample(avctx, "unsupported xoffset %d\n", xoffset);
         return AVERROR_PATCHWELCOME;
     }
 
@@ -144,13 +144,13 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
         return AVERROR_INVALIDDATA;
     }
 
-    if (bytestream2_get_bytes_left(&gb) < ncolors * XWD_CMAP_SIZE + (uint64_t)avctx->height * lsize) {
+    if (bytestream2_get_bytes_left(&gb) < ncolors * XWD_CMAP_SIZE + avctx->height * lsize) {
         av_log(avctx, AV_LOG_ERROR, "input buffer too small\n");
         return AVERROR_INVALIDDATA;
     }
 
     if (pixformat != XWD_Z_PIXMAP) {
-        avpriv_report_missing_feature(avctx, "Pixmap format %"PRIu32, pixformat);
+        av_log(avctx, AV_LOG_ERROR, "pixmap format %d unsupported\n", pixformat);
         return AVERROR_PATCHWELCOME;
     }
 
@@ -160,9 +160,9 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
     case XWD_GRAY_SCALE:
         if (bpp != 1 && bpp != 8)
             return AVERROR_INVALIDDATA;
-        if (bpp == 1 && pixdepth == 1) {
+        if (pixdepth == 1) {
             avctx->pix_fmt = AV_PIX_FMT_MONOWHITE;
-        } else if (bpp == 8 && pixdepth == 8) {
+        } else if (pixdepth == 8) {
             avctx->pix_fmt = AV_PIX_FMT_GRAY8;
         }
         break;
@@ -204,26 +204,28 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
     }
 
     if (avctx->pix_fmt == AV_PIX_FMT_NONE) {
-        avpriv_request_sample(avctx,
-                              "Unknown file: bpp %"PRIu32", pixdepth %"PRIu32", vclass %"PRIu32"",
-                              bpp, pixdepth, vclass);
+        av_log_ask_for_sample(avctx, "unknown file: bpp %d, pixdepth %d, vclass %d\n", bpp, pixdepth, vclass);
         return AVERROR_PATCHWELCOME;
     }
 
-    if (avctx->skip_frame >= AVDISCARD_ALL)
-        return avpkt->size;
+    if (p->data[0])
+        avctx->release_buffer(avctx, p);
 
-    if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
+    p->reference = 0;
+    if ((ret = ff_get_buffer(avctx, p)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
+    }
 
-    p->flags |= AV_FRAME_FLAG_KEY;
+    p->key_frame = 1;
     p->pict_type = AV_PICTURE_TYPE_I;
 
     if (avctx->pix_fmt == AV_PIX_FMT_PAL8) {
         uint32_t *dst = (uint32_t *)p->data[1];
         uint8_t red, green, blue;
 
-        for (int i = 0; i < ncolors; i++) {
+        for (i = 0; i < ncolors; i++) {
+
             bytestream2_skipu(&gb, 4); // skip colormap entry number
             red    = bytestream2_get_byteu(&gb);
             bytestream2_skipu(&gb, 1);
@@ -232,28 +234,40 @@ static int xwd_decode_frame(AVCodecContext *avctx, AVFrame *p,
             blue   = bytestream2_get_byteu(&gb);
             bytestream2_skipu(&gb, 3); // skip bitmask flag and padding
 
-            dst[i] = 0xFFU << 24 | red << 16 | green << 8 | blue;
+            dst[i] = red << 16 | green << 8 | blue;
         }
     }
 
     ptr = p->data[0];
-    for (int i = 0; i < avctx->height; i++) {
+    for (i = 0; i < avctx->height; i++) {
         bytestream2_get_bufferu(&gb, ptr, rsize);
         bytestream2_skipu(&gb, lsize - rsize);
         ptr += p->linesize[0];
     }
 
     *got_frame       = 1;
+    *(AVFrame *)data = *p;
 
-    return avpkt->size;
+    return buf_size;
 }
 
-const FFCodec ff_xwd_decoder = {
-    .p.name         = "xwd",
-    CODEC_LONG_NAME("XWD (X Window Dump) image"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_XWD,
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_SKIP_FRAME_FILL_PARAM,
-    FF_CODEC_DECODE_CB(xwd_decode_frame),
+static av_cold int xwd_decode_close(AVCodecContext *avctx)
+{
+    if (avctx->coded_frame->data[0])
+        avctx->release_buffer(avctx, avctx->coded_frame);
+
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_xwd_decoder = {
+    .name           = "xwd",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_XWD,
+    .init           = xwd_decode_init,
+    .close          = xwd_decode_close,
+    .decode         = xwd_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("XWD (X Window Dump) image"),
 };

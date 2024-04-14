@@ -23,20 +23,18 @@
 
 #include "libavutil/channel_layout.h"
 #include "libavutil/bprint.h"
-#include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
-#include "internal.h"
+#include "avfiltergraph.h"
 
 static int print_link_prop(AVBPrint *buf, AVFilterLink *link)
 {
-    const char *format;
-    AVBPrint dummy_buffer;
+    char *format;
+    char layout[64];
+    AVBPrint dummy_buffer = { 0 };
 
-    if (!buf) {
+    if (!buf)
         buf = &dummy_buffer;
-        av_bprint_init(buf, 0, AV_BPRINT_SIZE_COUNT_ONLY);
-    }
     switch (link->type) {
         case AVMEDIA_TYPE_VIDEO:
             format = av_x_if_null(av_get_pix_fmt_name(link->format), "?");
@@ -47,11 +45,11 @@ static int print_link_prop(AVBPrint *buf, AVFilterLink *link)
             break;
 
         case AVMEDIA_TYPE_AUDIO:
+            av_get_channel_layout_string(layout, sizeof(layout),
+                                         -1, link->channel_layout);
             format = av_x_if_null(av_get_sample_fmt_name(link->format), "?");
-            av_bprintf(buf, "[%dHz %s:",
-                       (int)link->sample_rate, format);
-            av_channel_layout_describe_bprint(&link->ch_layout, buf);
-            av_bprint_chars(buf, ']', 1);
+            av_bprintf(buf, "[%dHz %s:%s]",
+                       (int)link->sample_rate, format, layout);
             break;
 
         default:
@@ -65,7 +63,7 @@ static void avfilter_graph_dump_to_buf(AVBPrint *buf, AVFilterGraph *graph)
 {
     unsigned i, j, x, e;
 
-    for (i = 0; i < graph->nb_filters; i++) {
+    for (i = 0; i < graph->filter_count; i++) {
         AVFilterContext *filter = graph->filters[i];
         unsigned max_src_name = 0, max_dst_name = 0;
         unsigned max_in_name  = 0, max_out_name = 0;
@@ -74,14 +72,14 @@ static void avfilter_graph_dump_to_buf(AVBPrint *buf, AVFilterGraph *graph)
         unsigned lname = strlen(filter->name);
         unsigned ltype = strlen(filter->filter->name);
 
-        for (j = 0; j < filter->nb_inputs; j++) {
+        for (j = 0; j < filter->input_count; j++) {
             AVFilterLink *l = filter->inputs[j];
             unsigned ln = strlen(l->src->name) + 1 + strlen(l->srcpad->name);
             max_src_name = FFMAX(max_src_name, ln);
             max_in_name = FFMAX(max_in_name, strlen(l->dstpad->name));
             max_in_fmt = FFMAX(max_in_fmt, print_link_prop(NULL, l));
         }
-        for (j = 0; j < filter->nb_outputs; j++) {
+        for (j = 0; j < filter->output_count; j++) {
             AVFilterLink *l = filter->outputs[j];
             unsigned ln = strlen(l->dst->name) + 1 + strlen(l->dstpad->name);
             max_dst_name = FFMAX(max_dst_name, ln);
@@ -91,17 +89,17 @@ static void avfilter_graph_dump_to_buf(AVBPrint *buf, AVFilterGraph *graph)
         in_indent = max_src_name + max_in_name + max_in_fmt;
         in_indent += in_indent ? 4 : 0;
         width = FFMAX(lname + 2, ltype + 4);
-        height = FFMAX3(2, filter->nb_inputs, filter->nb_outputs);
+        height = FFMAX3(2, filter->input_count, filter->output_count);
         av_bprint_chars(buf, ' ', in_indent);
         av_bprintf(buf, "+");
         av_bprint_chars(buf, '-', width);
         av_bprintf(buf, "+\n");
         for (j = 0; j < height; j++) {
-            unsigned in_no  = j - (height - filter->nb_inputs ) / 2;
-            unsigned out_no = j - (height - filter->nb_outputs) / 2;
+            unsigned in_no  = j - (height - filter->input_count ) / 2;
+            unsigned out_no = j - (height - filter->output_count) / 2;
 
             /* Input link */
-            if (in_no < filter->nb_inputs) {
+            if (in_no < filter->input_count) {
                 AVFilterLink *l = filter->inputs[in_no];
                 e = buf->len + max_src_name + 2;
                 av_bprintf(buf, "%s:%s", l->src->name, l->srcpad->name);
@@ -130,7 +128,7 @@ static void avfilter_graph_dump_to_buf(AVBPrint *buf, AVFilterGraph *graph)
             av_bprintf(buf, "|");
 
             /* Output link */
-            if (out_no < filter->nb_outputs) {
+            if (out_no < filter->output_count) {
                 AVFilterLink *l = filter->outputs[out_no];
                 unsigned ln = strlen(l->dst->name) + 1 +
                               strlen(l->dstpad->name);
@@ -156,14 +154,12 @@ static void avfilter_graph_dump_to_buf(AVBPrint *buf, AVFilterGraph *graph)
 char *avfilter_graph_dump(AVFilterGraph *graph, const char *options)
 {
     AVBPrint buf;
-    char *dump = NULL;
+    char *dump;
 
-    av_bprint_init(&buf, 0, AV_BPRINT_SIZE_COUNT_ONLY);
+    av_bprint_init(&buf, 0, 0);
     avfilter_graph_dump_to_buf(&buf, graph);
-    dump = av_malloc(buf.len + 1);
-    if (!dump)
-        return NULL;
-    av_bprint_init_for_buffer(&buf, dump, buf.len + 1);
+    av_bprint_init(&buf, buf.len + 1, buf.len + 1);
     avfilter_graph_dump_to_buf(&buf, graph);
+    av_bprint_finalize(&buf, &dump);
     return dump;
 }

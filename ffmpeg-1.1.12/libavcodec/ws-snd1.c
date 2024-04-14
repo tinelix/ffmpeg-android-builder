@@ -25,8 +25,7 @@
 #include "libavutil/common.h"
 #include "libavutil/intreadwrite.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 /**
  * @file
@@ -42,18 +41,28 @@ static const int8_t ws_adpcm_4bit[] = {
      0,  1,  2,  3,  4,  5,  6,  8
 };
 
+typedef struct WSSndContext {
+    AVFrame frame;
+} WSSndContext;
+
 static av_cold int ws_snd_decode_init(AVCodecContext *avctx)
 {
-    av_channel_layout_uninit(&avctx->ch_layout);
-    avctx->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    WSSndContext *s = avctx->priv_data;
+
+    avctx->channels       = 1;
+    avctx->channel_layout = AV_CH_LAYOUT_MONO;
     avctx->sample_fmt     = AV_SAMPLE_FMT_U8;
+
+    avcodec_get_frame_defaults(&s->frame);
+    avctx->coded_frame = &s->frame;
 
     return 0;
 }
 
-static int ws_snd_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int ws_snd_decode_frame(AVCodecContext *avctx, void *data,
                                int *got_frame_ptr, AVPacket *avpkt)
 {
+    WSSndContext *s = avctx->priv_data;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
 
@@ -80,15 +89,18 @@ static int ws_snd_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     }
 
     /* get output buffer */
-    frame->nb_samples = out_size;
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
+    s->frame.nb_samples = out_size;
+    if ((ret = ff_get_buffer(avctx, &s->frame)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
-    samples     = frame->data[0];
+    }
+    samples     = s->frame.data[0];
     samples_end = samples + out_size;
 
     if (in_size == out_size) {
         memcpy(samples, buf, out_size);
-        *got_frame_ptr = 1;
+        *got_frame_ptr   = 1;
+        *(AVFrame *)data = s->frame;
         return buf_size;
     }
 
@@ -164,18 +176,20 @@ static int ws_snd_decode_frame(AVCodecContext *avctx, AVFrame *frame,
         }
     }
 
-    frame->nb_samples = samples - frame->data[0];
-    *got_frame_ptr    = 1;
+    s->frame.nb_samples = samples - s->frame.data[0];
+    *got_frame_ptr   = 1;
+    *(AVFrame *)data = s->frame;
 
     return buf_size;
 }
 
-const FFCodec ff_ws_snd1_decoder = {
-    .p.name         = "ws_snd1",
-    CODEC_LONG_NAME("Westwood Audio (SND1)"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_WESTWOOD_SND1,
+AVCodec ff_ws_snd1_decoder = {
+    .name           = "ws_snd1",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_WESTWOOD_SND1,
+    .priv_data_size = sizeof(WSSndContext),
     .init           = ws_snd_decode_init,
-    FF_CODEC_DECODE_CB(ws_snd_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .decode         = ws_snd_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Westwood Audio (SND1)"),
 };

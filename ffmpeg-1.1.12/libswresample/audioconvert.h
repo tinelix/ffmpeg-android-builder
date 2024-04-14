@@ -20,8 +20,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef SWRESAMPLE_AUDIOCONVERT_H
-#define SWRESAMPLE_AUDIOCONVERT_H
+#ifndef SWR_AUDIOCONVERT_H
+#define SWR_AUDIOCONVERT_H
 
 /**
  * @file
@@ -30,6 +30,7 @@
 
 
 #include "swresample_internal.h"
+#include "libavutil/cpu.h"
 
 
 typedef void (conv_func_type)(uint8_t *po, const uint8_t *pi, int is, int os, uint8_t *end);
@@ -74,4 +75,4 @@ void swri_audio_convert_free(AudioConvert **ctx);
  */
 int swri_audio_convert(AudioConvert *ctx, AudioData *out, AudioData *in, int len);
 
-#endif /* SWRESAMPLE_AUDIOCONVERT_H */
+#endif /* AUDIOCONVERT_H */

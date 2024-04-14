@@ -19,35 +19,26 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/internal.h"
+#include "libavformat/internal.h"
 #include "libavutil/log.h"
-#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
-
-#include "libavcodec/packet_internal.h"
-#include "libavformat/demux.h"
-#include "libavformat/internal.h"
-
-// windows.h must no be included before winsock2.h, and libavformat internal
-// headers may include winsock2.h
 #include <windows.h>
-// windows.h needs to be included before vfw.h
 #include <vfw.h>
-
 #include "avdevice.h"
 
-/* Some obsolete versions of MinGW32 before 4.0.0 lack this. */
-#ifndef HWND_MESSAGE
-#define HWND_MESSAGE ((HWND) -3)
-#endif
+/* Defines for VFW missing from MinGW.
+ * Remove this when MinGW incorporates them. */
+#define HWND_MESSAGE                ((HWND)-3)
+
+/* End of missing MinGW defines */
 
 struct vfw_ctx {
     const AVClass *class;
     HWND hwnd;
     HANDLE mutex;
     HANDLE event;
-    PacketListEntry *pktl;
+    AVPacketList *pktl;
     unsigned int curbufsize;
     unsigned int frame_num;
     char *video_size;       /**< A string describing video size, set by a private option. */
@@ -164,7 +155,7 @@ static void dump_bih(AVFormatContext *s, BITMAPINFOHEADER *bih)
 static int shall_we_drop(AVFormatContext *s)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    static const uint8_t dropscore[4] = { 62, 75, 87, 100 };
+    const uint8_t dropscore[] = {62, 75, 87, 100};
     const int ndropscores = FF_ARRAY_ELEMS(dropscore);
     unsigned int buffer_fullness = (ctx->curbufsize*100)/s->max_picture_buffer;
 
@@ -181,7 +172,7 @@ static LRESULT CALLBACK videostream_cb(HWND hwnd, LPVIDEOHDR vdhdr)
 {
     AVFormatContext *s;
     struct vfw_ctx *ctx;
-    PacketListEntry **ppktl, *pktl_next;
+    AVPacketList **ppktl, *pktl_next;
 
     s = (AVFormatContext *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
     ctx = s->priv_data;
@@ -193,7 +184,7 @@ static LRESULT CALLBACK videostream_cb(HWND hwnd, LPVIDEOHDR vdhdr)
 
     WaitForSingleObject(ctx->mutex, INFINITE);
 
-    pktl_next = av_mallocz(sizeof(*pktl_next));
+    pktl_next = av_mallocz(sizeof(AVPacketList));
     if(!pktl_next)
         goto fail;
 
@@ -222,7 +213,7 @@ fail:
 static int vfw_read_close(AVFormatContext *s)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    PacketListEntry *pktl;
+    AVPacketList *pktl;
 
     if(ctx->hwnd) {
         SendMessage(ctx->hwnd, WM_CAP_SET_CALLBACK_VIDEOSTREAM, 0, 0);
@@ -236,8 +227,8 @@ static int vfw_read_close(AVFormatContext *s)
 
     pktl = ctx->pktl;
     while (pktl) {
-        PacketListEntry *next = pktl->next;
-        av_packet_unref(&pktl->pkt);
+        AVPacketList *next = pktl->next;
+        av_destruct_packet(&pktl->pkt);
         av_free(pktl);
         pktl = next;
     }
@@ -248,7 +239,7 @@ static int vfw_read_close(AVFormatContext *s)
 static int vfw_read_header(AVFormatContext *s)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    AVCodecParameters *par;
+    AVCodecContext *codec;
     AVStream *st;
     int devnum;
     int bisize;
@@ -259,7 +250,7 @@ static int vfw_read_header(AVFormatContext *s)
     int ret;
     AVRational framerate_q;
 
-    if (!strcmp(s->url, "list")) {
+    if (!strcmp(s->filename, "list")) {
         for (devnum = 0; devnum <= 9; devnum++) {
             char driver_name[256];
             char driver_ver[256];
@@ -282,7 +273,7 @@ static int vfw_read_header(AVFormatContext *s)
     }
 
     /* If atoi fails, devnum==0 and the default device is used */
-    devnum = atoi(s->url);
+    devnum = atoi(s->filename);
 
     ret = SendMessage(ctx->hwnd, WM_CAP_DRIVER_CONNECT, devnum, 0);
     if(!ret) {
@@ -331,14 +322,11 @@ static int vfw_read_header(AVFormatContext *s)
     }
 
     if (ctx->video_size) {
-        int w, h;
-        ret = av_parse_video_size(&w, &h, ctx->video_size);
+        ret = av_parse_video_size(&bi->bmiHeader.biWidth, &bi->bmiHeader.biHeight, ctx->video_size);
         if (ret < 0) {
             av_log(s, AV_LOG_ERROR, "Couldn't parse video size.\n");
             goto fail;
         }
-        bi->bmiHeader.biWidth  = w;
-        bi->bmiHeader.biHeight = h;
     }
 
     if (0) {
@@ -383,29 +371,29 @@ static int vfw_read_header(AVFormatContext *s)
     if(!ret)
         goto fail;
 
-    st->avg_frame_rate = framerate_q;
-
-    par = st->codecpar;
-    par->codec_type = AVMEDIA_TYPE_VIDEO;
-    par->width  = bi->bmiHeader.biWidth;
-    par->height = bi->bmiHeader.biHeight;
-    par->format = vfw_pixfmt(biCompression, biBitCount);
-    if (par->format == AV_PIX_FMT_NONE) {
-        par->codec_id = vfw_codecid(biCompression);
-        if (par->codec_id == AV_CODEC_ID_NONE) {
-            avpriv_report_missing_feature(s, "This compression type");
+    codec = st->codec;
+    codec->time_base = av_inv_q(framerate_q);
+    codec->codec_type = AVMEDIA_TYPE_VIDEO;
+    codec->width  = bi->bmiHeader.biWidth;
+    codec->height = bi->bmiHeader.biHeight;
+    codec->pix_fmt = vfw_pixfmt(biCompression, biBitCount);
+    if(codec->pix_fmt == AV_PIX_FMT_NONE) {
+        codec->codec_id = vfw_codecid(biCompression);
+        if(codec->codec_id == AV_CODEC_ID_NONE) {
+            av_log(s, AV_LOG_ERROR, "Unknown compression type. "
+                             "Please report verbose (-v 9) debug information.\n");
             vfw_read_close(s);
             return AVERROR_PATCHWELCOME;
         }
-        par->bits_per_coded_sample = biBitCount;
+        codec->bits_per_coded_sample = biBitCount;
     } else {
-        par->codec_id = AV_CODEC_ID_RAWVIDEO;
+        codec->codec_id = AV_CODEC_ID_RAWVIDEO;
         if(biCompression == BI_RGB) {
-            par->bits_per_coded_sample = biBitCount;
-            par->extradata = av_malloc(9 + AV_INPUT_BUFFER_PADDING_SIZE);
-            if (par->extradata) {
-                par->extradata_size = 9;
-                memcpy(par->extradata, "BottomUp", 9);
+            codec->bits_per_coded_sample = biBitCount;
+            codec->extradata = av_malloc(9 + FF_INPUT_BUFFER_PADDING_SIZE);
+            if (codec->extradata) {
+                codec->extradata_size = 9;
+                memcpy(codec->extradata, "BottomUp", 9);
             }
         }
     }
@@ -442,7 +430,7 @@ fail:
 static int vfw_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     struct vfw_ctx *ctx = s->priv_data;
-    PacketListEntry *pktl = NULL;
+    AVPacketList *pktl = NULL;
 
     while(!pktl) {
         WaitForSingleObject(ctx->mutex, INFINITE);
@@ -481,16 +469,15 @@ static const AVClass vfw_class = {
     .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
-    .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT
 };
 
-const FFInputFormat ff_vfwcap_demuxer = {
-    .p.name         = "vfwcap",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("VfW video capture"),
-    .p.flags        = AVFMT_NOFILE,
-    .p.priv_class   = &vfw_class,
+AVInputFormat ff_vfwcap_demuxer = {
+    .name           = "vfwcap",
+    .long_name      = NULL_IF_CONFIG_SMALL("VfW video capture"),
     .priv_data_size = sizeof(struct vfw_ctx),
     .read_header    = vfw_read_header,
     .read_packet    = vfw_read_packet,
     .read_close     = vfw_read_close,
+    .flags          = AVFMT_NOFILE,
+    .priv_class     = &vfw_class,
 };

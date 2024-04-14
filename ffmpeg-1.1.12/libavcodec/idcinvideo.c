@@ -1,6 +1,6 @@
 /*
  * id Quake II CIN Video Decoder
- * Copyright (C) 2003 The FFmpeg project
+ * Copyright (C) 2003 the ffmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -44,19 +44,20 @@
  * decoding algorithm and it worked fine on much lower spec machines.
  */
 
-#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/internal.h"
 
 #define HUFFMAN_TABLE_SIZE 64 * 1024
 #define HUF_TOKENS 256
 #define PALETTE_COUNT 256
 
-typedef struct hnode {
+typedef struct
+{
   int count;
   unsigned char used;
   int children[2];
@@ -65,6 +66,7 @@ typedef struct hnode {
 typedef struct IdcinContext {
 
     AVCodecContext *avctx;
+    AVFrame frame;
 
     const unsigned char *buf;
     int size;
@@ -166,10 +168,13 @@ static av_cold int idcin_decode_init(AVCodecContext *avctx)
         huff_build_tree(s, i);
     }
 
+    avcodec_get_frame_defaults(&s->frame);
+    s->frame.data[0] = NULL;
+
     return 0;
 }
 
-static int idcin_decode_vlcs(IdcinContext *s, AVFrame *frame)
+static int idcin_decode_vlcs(IdcinContext *s)
 {
     hnode *hnodes;
     long x, y;
@@ -178,8 +183,8 @@ static int idcin_decode_vlcs(IdcinContext *s, AVFrame *frame)
     int bit_pos, node_num, dat_pos;
 
     prev = bit_pos = dat_pos = 0;
-    for (y = 0; y < (frame->linesize[0] * s->avctx->height);
-        y += frame->linesize[0]) {
+    for (y = 0; y < (s->frame.linesize[0] * s->avctx->height);
+        y += s->frame.linesize[0]) {
         for (x = y; x < y + s->avctx->width; x++) {
             node_num = s->num_huff_nodes[prev];
             hnodes = s->huff_nodes[prev];
@@ -199,7 +204,7 @@ static int idcin_decode_vlcs(IdcinContext *s, AVFrame *frame)
                 bit_pos--;
             }
 
-            frame->data[0][x] = node_num;
+            s->frame.data[0][x] = node_num;
             prev = node_num;
         }
     }
@@ -207,53 +212,62 @@ static int idcin_decode_vlcs(IdcinContext *s, AVFrame *frame)
     return 0;
 }
 
-static int idcin_decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                              int *got_frame, AVPacket *avpkt)
+static int idcin_decode_frame(AVCodecContext *avctx,
+                              void *data, int *got_frame,
+                              AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     IdcinContext *s = avctx->priv_data;
+    const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE, NULL);
     int ret;
 
     s->buf = buf;
     s->size = buf_size;
 
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
-        return ret;
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
 
-    if (idcin_decode_vlcs(s, frame))
+    if ((ret = ff_get_buffer(avctx, &s->frame))) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
+        return ret;
+    }
+
+    if (idcin_decode_vlcs(s))
         return AVERROR_INVALIDDATA;
 
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-    frame->palette_has_changed =
-#endif
-    ff_copy_palette(s->pal, avpkt, avctx);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
+    if (pal) {
+        s->frame.palette_has_changed = 1;
+        memcpy(s->pal, pal, AVPALETTE_SIZE);
+    }
     /* make the palette available on the way out */
-    memcpy(frame->data[1], s->pal, AVPALETTE_SIZE);
+    memcpy(s->frame.data[1], s->pal, AVPALETTE_SIZE);
 
     *got_frame = 1;
+    *(AVFrame*)data = s->frame;
 
     /* report that the buffer was completely consumed */
     return buf_size;
 }
 
-static const FFCodecDefault idcin_defaults[] = {
-    { "max_pixels", "320*240" },
-    { NULL },
-};
+static av_cold int idcin_decode_end(AVCodecContext *avctx)
+{
+    IdcinContext *s = avctx->priv_data;
 
-const FFCodec ff_idcin_decoder = {
-    .p.name         = "idcinvideo",
-    CODEC_LONG_NAME("id Quake II CIN video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_IDCIN,
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
+
+    return 0;
+}
+
+AVCodec ff_idcin_decoder = {
+    .name           = "idcinvideo",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_IDCIN,
     .priv_data_size = sizeof(IdcinContext),
     .init           = idcin_decode_init,
-    FF_CODEC_DECODE_CB(idcin_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .defaults       = idcin_defaults,
+    .close          = idcin_decode_end,
+    .decode         = idcin_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("id Quake II CIN video"),
 };

@@ -24,21 +24,20 @@
  * GSM decoder
  */
 
-#include "config_components.h"
-
 #include "libavutil/channel_layout.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 #include "msgsmdec.h"
 
 #include "gsmdec_template.c"
 
 static av_cold int gsm_init(AVCodecContext *avctx)
 {
-    av_channel_layout_uninit(&avctx->ch_layout);
-    avctx->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    GSMContext *s = avctx->priv_data;
+
+    avctx->channels       = 1;
+    avctx->channel_layout = AV_CH_LAYOUT_MONO;
     if (!avctx->sample_rate)
         avctx->sample_rate = 8000;
     avctx->sample_fmt     = AV_SAMPLE_FMT_S16;
@@ -50,24 +49,19 @@ static av_cold int gsm_init(AVCodecContext *avctx)
         break;
     case AV_CODEC_ID_GSM_MS:
         avctx->frame_size  = 2 * GSM_FRAME_SIZE;
-        if (!avctx->block_align)
-            avctx->block_align = GSM_MS_BLOCK_SIZE;
-        else
-            if (avctx->block_align < MSN_MIN_BLOCK_SIZE ||
-                avctx->block_align > GSM_MS_BLOCK_SIZE  ||
-                (avctx->block_align - MSN_MIN_BLOCK_SIZE) % 3) {
-                av_log(avctx, AV_LOG_ERROR, "Invalid block alignment %d\n",
-                       avctx->block_align);
-                return AVERROR_INVALIDDATA;
-            }
+        avctx->block_align = GSM_MS_BLOCK_SIZE;
     }
+
+    avcodec_get_frame_defaults(&s->frame);
+    avctx->coded_frame = &s->frame;
 
     return 0;
 }
 
-static int gsm_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int gsm_decode_frame(AVCodecContext *avctx, void *data,
                             int *got_frame_ptr, AVPacket *avpkt)
 {
+    GSMContext *s = avctx->priv_data;
     int res;
     GetBitContext gb;
     const uint8_t *buf = avpkt->data;
@@ -80,28 +74,30 @@ static int gsm_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     }
 
     /* get output buffer */
-    frame->nb_samples = avctx->frame_size;
-    if ((res = ff_get_buffer(avctx, frame, 0)) < 0)
+    s->frame.nb_samples = avctx->frame_size;
+    if ((res = ff_get_buffer(avctx, &s->frame)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return res;
-    samples = (int16_t *)frame->data[0];
+    }
+    samples = (int16_t *)s->frame.data[0];
 
     switch (avctx->codec_id) {
     case AV_CODEC_ID_GSM:
         init_get_bits(&gb, buf, buf_size * 8);
         if (get_bits(&gb, 4) != 0xd)
             av_log(avctx, AV_LOG_WARNING, "Missing GSM magic!\n");
-        res = gsm_decode_block(avctx, samples, &gb, GSM_13000);
+        res = gsm_decode_block(avctx, samples, &gb);
         if (res < 0)
             return res;
         break;
     case AV_CODEC_ID_GSM_MS:
-        res = ff_msgsm_decode_block(avctx, samples, buf,
-                                    (GSM_MS_BLOCK_SIZE - avctx->block_align) / 3);
+        res = ff_msgsm_decode_block(avctx, samples, buf);
         if (res < 0)
             return res;
     }
 
-    *got_frame_ptr = 1;
+    *got_frame_ptr   = 1;
+    *(AVFrame *)data = s->frame;
 
     return avctx->block_align;
 }
@@ -113,28 +109,28 @@ static void gsm_flush(AVCodecContext *avctx)
 }
 
 #if CONFIG_GSM_DECODER
-const FFCodec ff_gsm_decoder = {
-    .p.name         = "gsm",
-    CODEC_LONG_NAME("GSM"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_GSM,
+AVCodec ff_gsm_decoder = {
+    .name           = "gsm",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_GSM,
     .priv_data_size = sizeof(GSMContext),
     .init           = gsm_init,
-    FF_CODEC_DECODE_CB(gsm_decode_frame),
+    .decode         = gsm_decode_frame,
     .flush          = gsm_flush,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("GSM"),
 };
 #endif
 #if CONFIG_GSM_MS_DECODER
-const FFCodec ff_gsm_ms_decoder = {
-    .p.name         = "gsm_ms",
-    CODEC_LONG_NAME("GSM Microsoft variant"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_GSM_MS,
+AVCodec ff_gsm_ms_decoder = {
+    .name           = "gsm_ms",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_GSM_MS,
     .priv_data_size = sizeof(GSMContext),
     .init           = gsm_init,
-    FF_CODEC_DECODE_CB(gsm_decode_frame),
+    .decode         = gsm_decode_frame,
     .flush          = gsm_flush,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("GSM Microsoft variant"),
 };
 #endif

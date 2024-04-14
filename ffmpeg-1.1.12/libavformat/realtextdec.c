@@ -25,37 +25,35 @@
  */
 
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "subtitles.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
-#include "libavutil/mem.h"
+#include "libavutil/intreadwrite.h"
 
 typedef struct {
     FFDemuxSubtitlesQueue q;
 } RealTextContext;
 
-static int realtext_probe(const AVProbeData *p)
+static int realtext_probe(AVProbeData *p)
 {
-    char buf[7];
-    FFTextReader tr;
-    ff_text_init_buf(&tr, p->buf, p->buf_size);
-    ff_text_read(&tr, buf, sizeof(buf));
+    const unsigned char *ptr = p->buf;
 
-    return !av_strncasecmp(buf, "<window", 7) ? AVPROBE_SCORE_EXTENSION : 0;
+    if (AV_RB24(ptr) == 0xEFBBBF)
+        ptr += 3;  /* skip UTF-8 BOM */
+    return !av_strncasecmp(ptr, "<window", 7) ? AVPROBE_SCORE_MAX/2 : 0;
 }
 
-static int64_t read_ts(const char *s)
+static int read_ts(const char *s)
 {
     int hh, mm, ss, ms;
 
-    if (sscanf(s, "%u:%u:%u.%u", &hh, &mm, &ss, &ms) == 4) return (hh*3600LL + mm*60LL + ss) * 100LL + ms;
-    if (sscanf(s, "%u:%u:%u"   , &hh, &mm, &ss     ) == 3) return (hh*3600LL + mm*60LL + ss) * 100LL;
-    if (sscanf(s,    "%u:%u.%u",      &mm, &ss, &ms) == 3) return (            mm*60LL + ss) * 100LL + ms;
-    if (sscanf(s,    "%u:%u"   ,      &mm, &ss     ) == 2) return (            mm*60LL + ss) * 100LL;
-    if (sscanf(s,       "%u.%u",           &ss, &ms) == 2) return (                      ss) * 100LL + ms;
-    return strtoll(s, NULL, 10) * 100ULL;
+    if (sscanf(s, "%u:%u:%u.%u", &hh, &mm, &ss, &ms) == 4) return (hh*3600 + mm*60 + ss) * 100 + ms;
+    if (sscanf(s, "%u:%u:%u"   , &hh, &mm, &ss     ) == 3) return (hh*3600 + mm*60 + ss) * 100;
+    if (sscanf(s,    "%u:%u.%u",      &mm, &ss, &ms) == 3) return (          mm*60 + ss) * 100 + ms;
+    if (sscanf(s,    "%u:%u"   ,      &mm, &ss     ) == 2) return (          mm*60 + ss) * 100;
+    if (sscanf(s,       "%u.%u",           &ss, &ms) == 2) return (                  ss) * 100 + ms;
+    return strtol(s, NULL, 10) * 100;
 }
 
 static int realtext_read_header(AVFormatContext *s)
@@ -65,26 +63,20 @@ static int realtext_read_header(AVFormatContext *s)
     AVBPrint buf;
     char c = 0;
     int res = 0, duration = read_ts("60"); // default duration is 60 seconds
-    FFTextReader tr;
-    ff_text_init_avio(s, &tr, s->pb);
 
     if (!st)
         return AVERROR(ENOMEM);
     avpriv_set_pts_info(st, 64, 1, 100);
-    st->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
-    st->codecpar->codec_id   = AV_CODEC_ID_REALTEXT;
+    st->codec->codec_type = AVMEDIA_TYPE_SUBTITLE;
+    st->codec->codec_id   = AV_CODEC_ID_REALTEXT;
 
     av_bprint_init(&buf, 0, AV_BPRINT_SIZE_UNLIMITED);
 
-    while (!ff_text_eof(&tr)) {
+    while (!url_feof(s->pb)) {
         AVPacket *sub;
-        const int64_t pos = ff_text_pos(&tr) - (c != 0);
-        int n = ff_smil_extract_next_text_chunk(&tr, &buf, &c);
+        const int64_t pos = avio_tell(s->pb) - (c != 0);
+        int n = ff_smil_extract_next_chunk(s->pb, &buf, &c);
 
-        if (n < 0) {
-            res = n;
-            goto end;
-        }
         if (n == 0)
             break;
 
@@ -92,23 +84,19 @@ static int realtext_read_header(AVFormatContext *s)
             /* save header to extradata */
             const char *p = ff_smil_get_attr_ptr(buf.str, "duration");
 
-            if (st->codecpar->extradata) {
-                res = AVERROR_INVALIDDATA;
-                goto end;
-            }
             if (p)
                 duration = read_ts(p);
-            st->codecpar->extradata = av_strdup(buf.str);
-            if (!st->codecpar->extradata) {
+            st->codec->extradata = av_strdup(buf.str);
+            if (!st->codec->extradata) {
                 res = AVERROR(ENOMEM);
                 goto end;
             }
-            st->codecpar->extradata_size = buf.len + 1;
+            st->codec->extradata_size = buf.len + 1;
         } else {
             /* if we just read a <time> tag, introduce a new event, otherwise merge
              * with the previous one */
             int merge = !av_strncasecmp(buf.str, "<time", 5) ? 0 : 1;
-            sub = ff_subtitles_queue_insert_bprint(&rt->q, &buf, merge);
+            sub = ff_subtitles_queue_insert(&rt->q, buf.str, buf.len, merge);
             if (!sub) {
                 res = AVERROR(ENOMEM);
                 goto end;
@@ -116,31 +104,50 @@ static int realtext_read_header(AVFormatContext *s)
             if (!merge) {
                 const char *begin = ff_smil_get_attr_ptr(buf.str, "begin");
                 const char *end   = ff_smil_get_attr_ptr(buf.str, "end");
-                int64_t endi = end ? read_ts(end) : 0;
 
                 sub->pos      = pos;
                 sub->pts      = begin ? read_ts(begin) : 0;
-                sub->duration = (end && endi > sub->pts && endi - (uint64_t)sub->pts <= INT64_MAX) ? endi - sub->pts : duration;
+                sub->duration = end ? (read_ts(end) - sub->pts) : duration;
             }
         }
         av_bprint_clear(&buf);
     }
-    ff_subtitles_queue_finalize(s, &rt->q);
+    ff_subtitles_queue_finalize(&rt->q);
 
 end:
     av_bprint_finalize(&buf, NULL);
     return res;
 }
 
-const FFInputFormat ff_realtext_demuxer = {
-    .p.name         = "realtext",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("RealText subtitle format"),
-    .p.extensions   = "rt",
+static int realtext_read_packet(AVFormatContext *s, AVPacket *pkt)
+{
+    RealTextContext *rt = s->priv_data;
+    return ff_subtitles_queue_read_packet(&rt->q, pkt);
+}
+
+static int realtext_read_seek(AVFormatContext *s, int stream_index,
+                             int64_t min_ts, int64_t ts, int64_t max_ts, int flags)
+{
+    RealTextContext *rt = s->priv_data;
+    return ff_subtitles_queue_seek(&rt->q, s, stream_index,
+                                   min_ts, ts, max_ts, flags);
+}
+
+static int realtext_read_close(AVFormatContext *s)
+{
+    RealTextContext *rt = s->priv_data;
+    ff_subtitles_queue_clean(&rt->q);
+    return 0;
+}
+
+AVInputFormat ff_realtext_demuxer = {
+    .name           = "realtext",
+    .long_name      = NULL_IF_CONFIG_SMALL("RealText subtitle format"),
     .priv_data_size = sizeof(RealTextContext),
-    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = realtext_probe,
     .read_header    = realtext_read_header,
-    .read_packet    = ff_subtitles_read_packet,
-    .read_seek2     = ff_subtitles_read_seek,
-    .read_close     = ff_subtitles_read_close,
+    .read_packet    = realtext_read_packet,
+    .read_seek2     = realtext_read_seek,
+    .read_close     = realtext_read_close,
+    .extensions     = "rt",
 };

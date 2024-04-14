@@ -23,78 +23,69 @@
  * swap UV filter
  */
 
-#include "libavutil/pixdesc.h"
 #include "avfilter.h"
 #include "formats.h"
 #include "internal.h"
 #include "video.h"
 
-static void do_swap(AVFrame *frame)
+static AVFilterBufferRef *get_video_buffer(AVFilterLink *link, int perms,
+                                           int w, int h)
 {
-    FFSWAP(uint8_t*,     frame->data[1],     frame->data[2]);
-    FFSWAP(int,          frame->linesize[1], frame->linesize[2]);
-    FFSWAP(AVBufferRef*, frame->buf[1],      frame->buf[2]);
-}
+    AVFilterBufferRef *picref =
+        ff_default_get_video_buffer(link, perms, w, h);
 
-static AVFrame *get_video_buffer(AVFilterLink *link, int w, int h)
-{
-    AVFrame *picref = ff_default_get_video_buffer(link, w, h);
-    do_swap(picref);
+    FFSWAP(uint8_t*, picref->data[1], picref->data[2]);
+    FFSWAP(int, picref->linesize[1], picref->linesize[2]);
+
     return picref;
 }
 
-static int filter_frame(AVFilterLink *link, AVFrame *inpicref)
+static int filter_frame(AVFilterLink *link, AVFilterBufferRef *inpicref)
 {
-    do_swap(inpicref);
+    FFSWAP(uint8_t*, inpicref->data[1], inpicref->data[2]);
+    FFSWAP(int, inpicref->linesize[1], inpicref->linesize[2]);
+
     return ff_filter_frame(link->dst->outputs[0], inpicref);
-}
-
-static int is_planar_yuv(const AVPixFmtDescriptor *desc)
-{
-    int i;
-
-    if (desc->flags & ~(AV_PIX_FMT_FLAG_BE | AV_PIX_FMT_FLAG_PLANAR | AV_PIX_FMT_FLAG_ALPHA) ||
-        desc->nb_components < 3 ||
-        (desc->comp[1].depth != desc->comp[2].depth))
-        return 0;
-    for (i = 0; i < desc->nb_components; i++) {
-        if (desc->comp[i].offset != 0 ||
-            desc->comp[i].shift != 0 ||
-            desc->comp[i].plane != i)
-            return 0;
-    }
-
-    return 1;
 }
 
 static int query_formats(AVFilterContext *ctx)
 {
-    AVFilterFormats *formats = NULL;
-    int fmt, ret;
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVA420P,
+        AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVA444P,
+        AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUVJ440P,
+        AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUVJ422P,
+        AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_NONE,
+    };
 
-    for (fmt = 0; av_pix_fmt_desc_get(fmt); fmt++) {
-        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(fmt);
-        if (is_planar_yuv(desc) && (ret = ff_add_format(&formats, fmt)) < 0)
-            return ret;
-    }
-
-    return ff_set_common_formats(ctx, formats);
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return 0;
 }
 
 static const AVFilterPad swapuv_inputs[] = {
     {
         .name             = "default",
         .type             = AVMEDIA_TYPE_VIDEO,
-        .get_buffer.video = get_video_buffer,
+        .get_video_buffer = get_video_buffer,
         .filter_frame     = filter_frame,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_swapuv = {
-    .name          = "swapuv",
-    .description   = NULL_IF_CONFIG_SMALL("Swap U and V components."),
-    FILTER_INPUTS(swapuv_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
-    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
+static const AVFilterPad swapuv_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter avfilter_vf_swapuv = {
+    .name      = "swapuv",
+    .description = NULL_IF_CONFIG_SMALL("Swap U and V components."),
+    .priv_size = 0,
+    .query_formats = query_formats,
+    .inputs        = swapuv_inputs,
+    .outputs       = swapuv_outputs,
 };

@@ -30,18 +30,15 @@
 #    define NDEBUG
 #endif
 
-// This can be enabled to allow detection of additional integer overflows with ubsan
-//#define CHECKED
-
 #include <limits.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <assert.h>
-#include <stdio.h>
 #include "config.h"
 #include "attributes.h"
-#include "libm.h"
-#include "macros.h"
+#include "timer.h"
+#include "cpu.h"
+#include "dict.h"
 
 #ifndef attribute_align_arg
 #if ARCH_X86_32 && AV_GCC_VERSION_AT_LEAST(4,2)
@@ -51,42 +48,40 @@
 #endif
 #endif
 
-#if defined(_WIN32) && CONFIG_SHARED && !defined(BUILDING_avutil)
-#    define av_export_avutil __declspec(dllimport)
+#if defined(_MSC_VER) && CONFIG_SHARED
+#    define av_export __declspec(dllimport)
 #else
-#    define av_export_avutil
+#    define av_export
 #endif
 
-#if HAVE_PRAGMA_DEPRECATED
-#    if defined(__ICL) || defined (__INTEL_COMPILER)
-#        define FF_DISABLE_DEPRECATION_WARNINGS __pragma(warning(push)) __pragma(warning(disable:1478))
-#        define FF_ENABLE_DEPRECATION_WARNINGS  __pragma(warning(pop))
-#    elif defined(_MSC_VER)
-#        define FF_DISABLE_DEPRECATION_WARNINGS __pragma(warning(push)) __pragma(warning(disable:4996))
-#        define FF_ENABLE_DEPRECATION_WARNINGS  __pragma(warning(pop))
-#    else
-#        define FF_DISABLE_DEPRECATION_WARNINGS _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
-#        define FF_ENABLE_DEPRECATION_WARNINGS  _Pragma("GCC diagnostic pop")
-#    endif
-#else
-#    define FF_DISABLE_DEPRECATION_WARNINGS
-#    define FF_ENABLE_DEPRECATION_WARNINGS
+#ifndef INT_BIT
+#    define INT_BIT (CHAR_BIT * sizeof(int))
 #endif
 
+#define FF_ALLOC_OR_GOTO(ctx, p, size, label)\
+{\
+    p = av_malloc(size);\
+    if (p == NULL && (size) != 0) {\
+        av_log(ctx, AV_LOG_ERROR, "Cannot allocate memory.\n");\
+        goto label;\
+    }\
+}
 
-#define FF_ALLOC_TYPED_ARRAY(p, nelem)  (p = av_malloc_array(nelem, sizeof(*p)))
-#define FF_ALLOCZ_TYPED_ARRAY(p, nelem) (p = av_calloc(nelem, sizeof(*p)))
+#define FF_ALLOCZ_OR_GOTO(ctx, p, size, label)\
+{\
+    p = av_mallocz(size);\
+    if (p == NULL && (size) != 0) {\
+        av_log(ctx, AV_LOG_ERROR, "Cannot allocate memory.\n");\
+        goto label;\
+    }\
+}
 
-#define FF_PTR_ADD(ptr, off) ((off) ? (ptr) + (off) : (ptr))
-
-/**
- * Access a field in a structure by its offset.
- */
-#define FF_FIELD_AT(type, off, obj) (*(type *)((char *)&(obj) + (off)))
+#include "libm.h"
 
 /**
  * Return NULL if CONFIG_SMALL is true, otherwise the argument
- * without modification. Used to disable the definition of strings.
+ * without modification. Used to disable the definition of strings
+ * (for example AVCodec long_names).
  */
 #if CONFIG_SMALL
 #   define NULL_IF_CONFIG_SMALL(x) NULL
@@ -95,73 +90,60 @@
 #endif
 
 /**
- * Log a generic warning message about a missing feature.
+ * Define a function with only the non-default version specified.
  *
- * @param[in] avc a pointer to an arbitrary struct of which the first
- *                field is a pointer to an AVClass struct
- * @param[in] msg string containing the name of the missing feature
+ * On systems with ELF shared libraries, all symbols exported from
+ * FFmpeg libraries are tagged with the name and major version of the
+ * library to which they belong.  If a function is moved from one
+ * library to another, a wrapper must be retained in the original
+ * location to preserve binary compatibility.
+ *
+ * Functions defined with this macro will never be used to resolve
+ * symbols by the build-time linker.
+ *
+ * @param type return type of function
+ * @param name name of function
+ * @param args argument list of function
+ * @param ver  version tag to assign function
  */
-void avpriv_report_missing_feature(void *avc,
-                                   const char *msg, ...) av_printf_format(2, 3);
+#if HAVE_SYMVER_ASM_LABEL
+#   define FF_SYMVER(type, name, args, ver)                     \
+    type ff_##name args __asm__ (EXTERN_PREFIX #name "@" ver);  \
+    type ff_##name args
+#elif HAVE_SYMVER_GNU_ASM
+#   define FF_SYMVER(type, name, args, ver)                             \
+    __asm__ (".symver ff_" #name "," EXTERN_PREFIX #name "@" ver);      \
+    type ff_##name args;                                                \
+    type ff_##name args
+#endif
 
 /**
- * Log a generic warning message about a missing feature.
- * Additionally request that a sample showcasing the feature be uploaded.
- *
- * @param[in] avc a pointer to an arbitrary struct of which the first field is
- *                a pointer to an AVClass struct
- * @param[in] msg string containing the name of the missing feature
+ * Return NULL if a threading library has not been enabled.
+ * Used to disable threading functions in AVCodec definitions
+ * when not needed.
  */
-void avpriv_request_sample(void *avc,
-                           const char *msg, ...) av_printf_format(2, 3);
-
-#if HAVE_LIBC_MSVCRT
-#include <crtversion.h>
-#if defined(_VC_CRT_MAJOR_VERSION) && _VC_CRT_MAJOR_VERSION < 14
-#pragma comment(linker, "/include:" EXTERN_PREFIX "avpriv_strtod")
-#pragma comment(linker, "/include:" EXTERN_PREFIX "avpriv_snprintf")
-#endif
-
-#define PTRDIFF_SPECIFIER "Id"
-#define SIZE_SPECIFIER "Iu"
+#if HAVE_THREADS
+#   define ONLY_IF_THREADS_ENABLED(x) x
 #else
-#define PTRDIFF_SPECIFIER "td"
-#define SIZE_SPECIFIER "zu"
+#   define ONLY_IF_THREADS_ENABLED(x) NULL
 #endif
 
-#ifdef DEBUG
-#   define ff_dlog(ctx, ...) av_log(ctx, AV_LOG_DEBUG, __VA_ARGS__)
-#else
-#   define ff_dlog(ctx, ...) do { if (0) av_log(ctx, AV_LOG_DEBUG, __VA_ARGS__); } while (0)
-#endif
-
-#ifdef TRACE
-#   define ff_tlog(ctx, ...) av_log(ctx, AV_LOG_TRACE, __VA_ARGS__)
-#else
-#   define ff_tlog(ctx, ...) do { } while(0)
-#endif
-
-// For debuging we use signed operations so overflows can be detected (by ubsan)
-// For production we use unsigned so there are no undefined operations
-#ifdef CHECKED
-#define SUINT   int
-#define SUINT32 int32_t
-#else
-#define SUINT   unsigned
-#define SUINT32 uint32_t
-#endif
-
-static av_always_inline av_const int avpriv_mirror(int x, int w)
+#if HAVE_MMX_INLINE
+/**
+ * Empty mmx state.
+ * this must be called between any dsp function and float/double code.
+ * for example sin(); dsp->idct_put(); emms_c(); cos()
+ */
+static av_always_inline void emms_c(void)
 {
-    if (!w)
-        return 0;
-
-    while ((unsigned)x > (unsigned)w) {
-        x = -x;
-        if (x < 0)
-            x += 2 * w;
-    }
-    return x;
+    if(av_get_cpu_flags() & AV_CPU_FLAG_MMX)
+        __asm__ volatile ("emms" ::: "memory");
 }
+#elif HAVE_MMX && HAVE_MM_EMPTY
+#   include <mmintrin.h>
+#   define emms_c _mm_empty
+#else
+#   define emms_c()
+#endif /* HAVE_MMX_INLINE */
 
 #endif /* AVUTIL_INTERNAL_H */

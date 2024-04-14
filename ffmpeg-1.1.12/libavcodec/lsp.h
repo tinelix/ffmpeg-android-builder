@@ -102,7 +102,7 @@ void ff_acelp_lp_decode(int16_t* lp_1st, int16_t* lp_2nd, const int16_t* lsp_2nd
  * @param lp_half_order half the number of the amount of LPCs to be
  *        reconstructed, need to be smaller or equal to MAX_LP_HALF_ORDER
  *
- * @note buffers should have a minimum size of 2*lp_half_order elements.
+ * @note buffers should have a minimux size of 2*lp_half_order elements.
  *
  * TIA/EIA/IS-733 2.4.3.3.5
  */
@@ -114,5 +114,17 @@ void ff_acelp_lspd2lpc(const double *lsp, float *lpc, int lp_half_order);
  * @note O(n) if data already sorted, O(n^2) - otherwise
  */
 void ff_sort_nearly_sorted_floats(float *vals, int len);
+
+/**
+ * Compute the Pa / (1 + z(-1)) or Qa / (1 - z(-1)) coefficients
+ * needed for LSP to LPC conversion.
+ * We only need to calculate the 6 first elements of the polynomial.
+ *
+ * @param lsp line spectral pairs in cosine domain
+ * @param[out] f polynomial input/output as a vector
+ *
+ * TIA/EIA/IS-733 2.4.3.3.5-1/2
+ */
+void ff_lsp2polyf(const double *lsp, double *f, int lp_half_order);
 
 #endif /* AVCODEC_LSP_H */

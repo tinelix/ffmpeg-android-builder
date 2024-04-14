@@ -168,7 +168,6 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-parsers \
 		--disable-muxers \
 		--disable-filters \
-		--disable-iconv \
 		--disable-debug \
 		--enable-network \
 		--enable-protocol=file,http,async,tcp,tls \
@@ -187,7 +186,7 @@ if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
 		--enable-asm"
 else
-	FFMPEG_FLAGS+=" --disable-yasm"
+	FFMPEG_FLAGS+=" --disable-asm"
 fi;
 
 # Build workaround special for FFmpeg 3.1.x

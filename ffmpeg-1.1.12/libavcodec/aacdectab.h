@@ -1,5 +1,7 @@
 /*
  * AAC decoder data
+ * Copyright (c) 2005-2006 Oded Shimon ( ods15 ods15 dyndns org )
+ * Copyright (c) 2006-2007 Maxim Gavrilov ( maxim.gavrilov gmail com )
  *
  * This file is part of FFmpeg.
  *
@@ -28,28 +30,75 @@
 #ifndef AVCODEC_AACDECTAB_H
 #define AVCODEC_AACDECTAB_H
 
+#include "libavutil/channel_layout.h"
+#include "aac.h"
+
 #include <stdint.h>
 
-#include "vlc.h"
+/* @name ltp_coef
+ * Table of the LTP coefficients
+ */
+static const float ltp_coef[8] = {
+    0.570829, 0.696616, 0.813004, 0.911304,
+    0.984900, 1.067894, 1.194601, 1.369533,
+};
 
-#include "libavutil/attributes_internal.h"
-#include "libavutil/channel_layout.h"
+/* @name tns_tmp2_map
+ * Tables of the tmp2[] arrays of LPC coefficients used for TNS.
+ * The suffix _M_N[] indicate the values of coef_compress and coef_res
+ * respectively.
+ * @{
+ */
+static const float tns_tmp2_map_1_3[4] = {
+     0.00000000, -0.43388373,  0.64278758,  0.34202015,
+};
 
-FF_VISIBILITY_PUSH_HIDDEN
-void ff_aacdec_common_init_once(void);
+static const float tns_tmp2_map_0_3[8] = {
+     0.00000000, -0.43388373, -0.78183150, -0.97492790,
+     0.98480773,  0.86602539,  0.64278758,  0.34202015,
+};
 
-extern const VLCElem *ff_aac_sbr_vlc[10];
+static const float tns_tmp2_map_1_4[8] = {
+     0.00000000, -0.20791170, -0.40673664, -0.58778524,
+     0.67369562,  0.52643216,  0.36124167,  0.18374951,
+};
 
-extern VLCElem ff_vlc_scalefactors[];
-extern const VLCElem *ff_vlc_spectral[11];
+static const float tns_tmp2_map_0_4[16] = {
+     0.00000000, -0.20791170, -0.40673664, -0.58778524,
+    -0.74314481, -0.86602539, -0.95105654, -0.99452192,
+     0.99573416,  0.96182561,  0.89516330,  0.79801720,
+     0.67369562,  0.52643216,  0.36124167,  0.18374951,
+};
 
-extern const int8_t ff_tags_per_config[16];
+static const float * const tns_tmp2_map[4] = {
+    tns_tmp2_map_0_3,
+    tns_tmp2_map_0_4,
+    tns_tmp2_map_1_3,
+    tns_tmp2_map_1_4
+};
+// @}
 
-extern const uint8_t ff_aac_channel_layout_map[16][16][3];
+static const int8_t tags_per_config[16] = { 0, 1, 1, 2, 3, 3, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-extern const int16_t ff_aac_channel_map[3][4][6];
+static const uint8_t aac_channel_layout_map[7][5][3] = {
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, },
+    { { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, },
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, },
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, { TYPE_SCE, 1, AAC_CHANNEL_BACK }, },
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 1, AAC_CHANNEL_BACK }, },
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 1, AAC_CHANNEL_BACK }, { TYPE_LFE, 0, AAC_CHANNEL_LFE  }, },
+    { { TYPE_SCE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 0, AAC_CHANNEL_FRONT }, { TYPE_CPE, 1, AAC_CHANNEL_FRONT }, { TYPE_CPE, 2, AAC_CHANNEL_BACK }, { TYPE_LFE, 0, AAC_CHANNEL_LFE  }, },
+};
 
-extern const AVChannelLayout ff_aac_ch_layout[];
-FF_VISIBILITY_POP_HIDDEN
+static const uint64_t aac_channel_layout[8] = {
+    AV_CH_LAYOUT_MONO,
+    AV_CH_LAYOUT_STEREO,
+    AV_CH_LAYOUT_SURROUND,
+    AV_CH_LAYOUT_4POINT0,
+    AV_CH_LAYOUT_5POINT0_BACK,
+    AV_CH_LAYOUT_5POINT1_BACK,
+    AV_CH_LAYOUT_7POINT1_WIDE_BACK,
+    0,
+};
 
 #endif /* AVCODEC_AACDECTAB_H */

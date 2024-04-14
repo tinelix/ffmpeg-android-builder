@@ -24,17 +24,19 @@
  * IBM Ultimotion Video Decoder.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
 
 #include "ulti_cb.h"
 
 typedef struct UltimotionDecodeContext {
     AVCodecContext *avctx;
     int width, height, blocks;
-    AVFrame *frame;
+    AVFrame frame;
     const uint8_t *ulti_codebook;
     GetByteContext gb;
 } UltimotionDecodeContext;
@@ -47,23 +49,20 @@ static av_cold int ulti_decode_init(AVCodecContext *avctx)
     s->width = avctx->width;
     s->height = avctx->height;
     s->blocks = (s->width / 8) * (s->height / 8);
-    if (s->blocks == 0)
-        return AVERROR_INVALIDDATA;
     avctx->pix_fmt = AV_PIX_FMT_YUV410P;
+    avctx->coded_frame = &s->frame;
+    avctx->coded_frame = (AVFrame*) &s->frame;
     s->ulti_codebook = ulti_codebook;
-
-    s->frame = av_frame_alloc();
-    if (!s->frame)
-        return AVERROR(ENOMEM);
 
     return 0;
 }
 
-static av_cold int ulti_decode_end(AVCodecContext *avctx)
-{
+static av_cold int ulti_decode_end(AVCodecContext *avctx){
     UltimotionDecodeContext *s = avctx->priv_data;
+    AVFrame *pic = &s->frame;
 
-    av_frame_free(&s->frame);
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
 
     return 0;
 }
@@ -210,8 +209,9 @@ static void ulti_grad(AVFrame *frame, int x, int y, uint8_t *Y, int chroma, int 
     ulti_convert_yuv(frame, x, y, Luma, chroma);
 }
 
-static int ulti_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                             int *got_frame, AVPacket *avpkt)
+static int ulti_decode_frame(AVCodecContext *avctx,
+                             void *data, int *got_frame,
+                             AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
@@ -222,12 +222,16 @@ static int ulti_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     int blocks = 0;
     int done = 0;
     int x = 0, y = 0;
-    int i, ret;
+    int i;
     int skip;
     int tmp;
 
-    if ((ret = ff_reget_buffer(avctx, s->frame, 0)) < 0)
-        return ret;
+    s->frame.reference = 3;
+    s->frame.buffer_hints = FF_BUFFER_HINTS_VALID | FF_BUFFER_HINTS_PRESERVE | FF_BUFFER_HINTS_REUSABLE;
+    if (avctx->reget_buffer(avctx, &s->frame) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "reget_buffer() failed\n");
+        return -1;
+    }
 
     bytestream2_init(&s->gb, buf, buf_size);
 
@@ -367,7 +371,7 @@ static int ulti_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
                         Luma[14] = (tmp >> 6) & 0x3F;
                         Luma[15] = tmp & 0x3F;
 
-                        ulti_convert_yuv(s->frame, tx, ty, Luma, chroma);
+                        ulti_convert_yuv(&s->frame, tx, ty, Luma, chroma);
                     } else {
                         if (bytestream2_get_bytes_left(&s->gb) < 4)
                             goto err;
@@ -379,19 +383,20 @@ static int ulti_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
                             Y[1] = tmp & 0x3F;
                             Y[2] = bytestream2_get_byteu(&s->gb) & 0x3F;
                             Y[3] = bytestream2_get_byteu(&s->gb) & 0x3F;
-                            ulti_grad(s->frame, tx, ty, Y, chroma, angle); //draw block
+                            ulti_grad(&s->frame, tx, ty, Y, chroma, angle); //draw block
                         } else { // some patterns
-                            int f0 = tmp;
-                            int f1 = bytestream2_get_byteu(&s->gb);
+                            int f0, f1;
+                            f0 = bytestream2_get_byteu(&s->gb);
+                            f1 = tmp;
                             Y[0] = bytestream2_get_byteu(&s->gb) & 0x3F;
                             Y[1] = bytestream2_get_byteu(&s->gb) & 0x3F;
-                            ulti_pattern(s->frame, tx, ty, f0, f1, Y[0], Y[1], chroma);
+                            ulti_pattern(&s->frame, tx, ty, f1, f0, Y[0], Y[1], chroma);
                         }
                     }
                     break;
                 }
                 if(code != 3)
-                    ulti_grad(s->frame, tx, ty, Y, chroma, angle); // draw block
+                    ulti_grad(&s->frame, tx, ty, Y, chroma, angle); // draw block
             }
             blocks++;
                 x += 8;
@@ -403,8 +408,7 @@ static int ulti_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     }
 
     *got_frame = 1;
-    if ((ret = av_frame_ref(rframe, s->frame)) < 0)
-        return ret;
+    *(AVFrame*)data= s->frame;
 
     return buf_size;
 
@@ -414,14 +418,14 @@ err:
     return AVERROR_INVALIDDATA;
 }
 
-const FFCodec ff_ulti_decoder = {
-    .p.name         = "ultimotion",
-    CODEC_LONG_NAME("IBM UltiMotion"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_ULTI,
+AVCodec ff_ulti_decoder = {
+    .name           = "ultimotion",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_ULTI,
     .priv_data_size = sizeof(UltimotionDecodeContext),
     .init           = ulti_decode_init,
     .close          = ulti_decode_end,
-    FF_CODEC_DECODE_CB(ulti_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode         = ulti_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("IBM UltiMotion"),
 };

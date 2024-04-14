@@ -21,7 +21,7 @@
 
 typedef struct AVFloatDSPContext {
     /**
-     * Calculate the entry wise product of two vectors of floats and store the result in
+     * Calculate the product of two vectors of floats and store the result in
      * a vector of floats.
      *
      * @param dst  output vector
@@ -53,22 +53,6 @@ typedef struct AVFloatDSPContext {
                                int len);
 
     /**
-     * Multiply a vector of doubles by a scalar double and add to
-     * destination vector.  Source and destination vectors must
-     * overlap exactly or not at all.
-     *
-     * @param dst result vector
-     *            constraints: 32-byte aligned
-     * @param src input vector
-     *            constraints: 32-byte aligned
-     * @param mul scalar value
-     * @param len length of vector
-     *            constraints: multiple of 16
-     */
-    void (*vector_dmac_scalar)(double *dst, const double *src, double mul,
-                               int len);
-
-    /**
      * Multiply a vector of floats by a scalar float.  Source and
      * destination vectors must overlap exactly or not at all.
      *
@@ -97,121 +81,20 @@ typedef struct AVFloatDSPContext {
      */
     void (*vector_dmul_scalar)(double *dst, const double *src, double mul,
                                int len);
-
-    /**
-     * Overlap/add with window function.
-     * Used primarily by MDCT-based audio codecs.
-     * Source and destination vectors must overlap exactly or not at all.
-     *
-     * @param dst  result vector
-     *             constraints: 16-byte aligned
-     * @param src0 first source vector
-     *             constraints: 16-byte aligned
-     * @param src1 second source vector
-     *             constraints: 16-byte aligned
-     * @param win  half-window vector
-     *             constraints: 16-byte aligned
-     * @param len  length of vector
-     *             constraints: multiple of 4
-     */
-    void (*vector_fmul_window)(float *dst, const float *src0,
-                               const float *src1, const float *win, int len);
-
-    /**
-     * Calculate the entry wise product of two vectors of floats, add a third vector of
-     * floats and store the result in a vector of floats.
-     *
-     * @param dst  output vector
-     *             constraints: 32-byte aligned
-     * @param src0 first input vector
-     *             constraints: 32-byte aligned
-     * @param src1 second input vector
-     *             constraints: 32-byte aligned
-     * @param src2 third input vector
-     *             constraints: 32-byte aligned
-     * @param len  number of elements in the input
-     *             constraints: multiple of 16
-     */
-    void (*vector_fmul_add)(float *dst, const float *src0, const float *src1,
-                            const float *src2, int len);
-
-    /**
-     * Calculate the entry wise product of two vectors of floats, and store the result
-     * in a vector of floats. The second vector of floats is iterated over
-     * in reverse order.
-     *
-     * @param dst  output vector
-     *             constraints: 32-byte aligned
-     * @param src0 first input vector
-     *             constraints: 32-byte aligned
-     * @param src1 second input vector
-     *             constraints: 32-byte aligned
-     * @param len  number of elements in the input
-     *             constraints: multiple of 16
-     */
-    void (*vector_fmul_reverse)(float *dst, const float *src0,
-                                const float *src1, int len);
-
-    /**
-     * Calculate the sum and difference of two vectors of floats.
-     *
-     * @param v1  first input vector, sum output, 16-byte aligned
-     * @param v2  second input vector, difference output, 16-byte aligned
-     * @param len length of vectors, multiple of 4
-     */
-    void (*butterflies_float)(float *restrict v1, float *restrict v2, int len);
-
-    /**
-     * Calculate the scalar product of two vectors of floats.
-     *
-     * @param v1  first vector, 16-byte aligned
-     * @param v2  second vector, 16-byte aligned
-     * @param len length of vectors, multiple of 4
-     *
-     * @return sum of elementwise products
-     */
-    float (*scalarproduct_float)(const float *v1, const float *v2, int len);
-
-    /**
-     * Calculate the entry wise product of two vectors of doubles and store the result in
-     * a vector of doubles.
-     *
-     * @param dst  output vector
-     *             constraints: 32-byte aligned
-     * @param src0 first input vector
-     *             constraints: 32-byte aligned
-     * @param src1 second input vector
-     *             constraints: 32-byte aligned
-     * @param len  number of elements in the input
-     *             constraints: multiple of 16
-     */
-    void (*vector_dmul)(double *dst, const double *src0, const double *src1,
-                        int len);
 } AVFloatDSPContext;
 
 /**
- * Return the scalar product of two vectors.
+ * Initialize a float DSP context.
  *
- * @param v1  first input vector
- * @param v2  first input vector
- * @param len number of elements
- *
- * @return sum of elementwise products
- */
-float avpriv_scalarproduct_float_c(const float *v1, const float *v2, int len);
-
-void ff_float_dsp_init_aarch64(AVFloatDSPContext *fdsp);
-void ff_float_dsp_init_arm(AVFloatDSPContext *fdsp);
-void ff_float_dsp_init_ppc(AVFloatDSPContext *fdsp, int strict);
-void ff_float_dsp_init_riscv(AVFloatDSPContext *fdsp);
-void ff_float_dsp_init_x86(AVFloatDSPContext *fdsp);
-void ff_float_dsp_init_mips(AVFloatDSPContext *fdsp);
-
-/**
- * Allocate a float DSP context.
- *
+ * @param fdsp    float DSP context
  * @param strict  setting to non-zero avoids using functions which may not be IEEE-754 compliant
  */
-AVFloatDSPContext *avpriv_float_dsp_alloc(int strict);
+void avpriv_float_dsp_init(AVFloatDSPContext *fdsp, int strict);
+
+
+void ff_float_dsp_init_arm(AVFloatDSPContext *fdsp);
+void ff_float_dsp_init_ppc(AVFloatDSPContext *fdsp, int strict);
+void ff_float_dsp_init_x86(AVFloatDSPContext *fdsp);
+void ff_float_dsp_init_mips(AVFloatDSPContext *fdsp);
 
 #endif /* AVUTIL_FLOAT_DSP_H */

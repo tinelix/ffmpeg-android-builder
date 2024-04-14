@@ -51,17 +51,11 @@
  * @file
  * Reference: libavcodec/lsp.c
  */
-#ifndef AVCODEC_MIPS_LSP_MIPS_H
-#define AVCODEC_MIPS_LSP_MIPS_H
-
-#include "config.h"
+#ifndef AVCODEC_LSP_MIPS_H
+#define AVCODEC_LSP_MIPS_H
 
 #if HAVE_MIPSFPU && HAVE_INLINE_ASM
-#if !HAVE_MIPS32R6 && !HAVE_MIPS64R6
-#include "libavutil/attributes.h"
-#include "libavutil/mips/asmdefs.h"
-
-static av_always_inline void lsp2polyf_mips(const double *lsp, double *f, int lp_half_order)
+static av_always_inline void ff_lsp2polyf_mips(const double *lsp, double *f, int lp_half_order)
 {
     int i, j = 0;
     double * p_fi = f;
@@ -79,7 +73,7 @@ static av_always_inline void lsp2polyf_mips(const double *lsp, double *f, int lp
         __asm__ volatile(
             "move   %[p_f],     %[p_fi]                         \n\t"
             "add.d  %[val],     %[val],     %[val]              \n\t"
-            PTR_ADDIU "%[p_fi], 8                               \n\t"
+            "addiu  %[p_fi],    8                               \n\t"
             "ldc1   %[f_j_1],   0(%[p_f])                       \n\t"
             "ldc1   %[f_j],     8(%[p_f])                       \n\t"
             "neg.d  %[val],     %[val]                          \n\t"
@@ -88,8 +82,8 @@ static av_always_inline void lsp2polyf_mips(const double *lsp, double *f, int lp
             "addiu  %[j],       %[i], -2                        \n\t"
             "ldc1   %[f_j_2],   -8(%[p_f])                      \n\t"
             "sdc1   %[tmp],     16(%[p_f])                      \n\t"
-            "beqz   %[j],       lsp2polyf_lp_j_end%=            \n\t"
-            "lsp2polyf_lp_j%=:                                  \n\t"
+            "beqz   %[j],       ff_lsp2polyf_lp_j_end%=         \n\t"
+            "ff_lsp2polyf_lp_j%=:                               \n\t"
             "add.d  %[tmp],     %[f_j],     %[f_j_2]            \n\t"
             "madd.d %[tmp],     %[tmp],     %[f_j_1], %[val]    \n\t"
             "mov.d  %[f_j],     %[f_j_1]                        \n\t"
@@ -97,20 +91,18 @@ static av_always_inline void lsp2polyf_mips(const double *lsp, double *f, int lp
             "mov.d  %[f_j_1],   %[f_j_2]                        \n\t"
             "ldc1   %[f_j_2],   -16(%[p_f])                     \n\t"
             "sdc1   %[tmp],     8(%[p_f])                       \n\t"
-            PTR_ADDIU "%[p_f], -8                              \n\t"
-            "bgtz   %[j],       lsp2polyf_lp_j%=                \n\t"
-            "lsp2polyf_lp_j_end%=:                              \n\t"
+            "addiu  %[p_f],     -8                              \n\t"
+            "bgtz   %[j],       ff_lsp2polyf_lp_j%=             \n\t"
+            "ff_lsp2polyf_lp_j_end%=:                           \n\t"
 
             : [f_j_2]"=&f"(f_j_2), [f_j_1]"=&f"(f_j_1), [val]"+f"(val),
               [tmp]"=&f"(tmp), [f_j]"=&f"(f_j), [p_f]"+r"(p_f),
               [j]"+r"(j), [p_fi]"+r"(p_fi)
             : [i]"r"(i)
-            : "memory"
         );
         f[1] += val;
     }
 }
-#define lsp2polyf lsp2polyf_mips
-#endif /* !HAVE_MIPS32R6 && !HAVE_MIPS64R6 */
+#define ff_lsp2polyf ff_lsp2polyf_mips
 #endif /* HAVE_MIPSFPU && HAVE_INLINE_ASM */
-#endif /* AVCODEC_MIPS_LSP_MIPS_H */
+#endif /* AVCODEC_LSP_MIPS_H */

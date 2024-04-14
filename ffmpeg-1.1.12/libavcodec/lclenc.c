@@ -35,6 +35,7 @@
  *   http://www.pcisys.net/~melanson/codecs
  *
  * Supports: BGR24 (RGB 24bpp)
+ *
  */
 
 #include <stdio.h>
@@ -42,18 +43,20 @@
 
 #include "libavutil/avassert.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "encode.h"
+#include "internal.h"
 #include "lcl.h"
-#include "zlib_wrapper.h"
 #include "libavutil/internal.h"
 #include "libavutil/mem.h"
 
 #include <zlib.h>
 
+/*
+ * Decoder context
+ */
 typedef struct LclEncContext {
 
     AVCodecContext *avctx;
+    AVFrame pic;
 
     // Image type
     int imgtype;
@@ -61,66 +64,81 @@ typedef struct LclEncContext {
     int compression;
     // Flags
     int flags;
-    FFZStream zstream;
+    z_stream zstream;
 } LclEncContext;
 
+/*
+ *
+ * Encode a frame
+ *
+ */
 static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
-                        const AVFrame *p, int *got_packet)
+                        const AVFrame *pict, int *got_packet)
 {
     LclEncContext *c = avctx->priv_data;
-    z_stream *const zstream = &c->zstream.zstream;
+    AVFrame * const p = &c->pic;
     int i, ret;
     int zret; // Zlib return code
-    int max_size = deflateBound(zstream, avctx->width * avctx->height * 3);
+    int max_size = deflateBound(&c->zstream, avctx->width * avctx->height * 3);
 
-    if ((ret = ff_alloc_packet(avctx, pkt, max_size)) < 0)
-        return ret;
+    if ((ret = ff_alloc_packet2(avctx, pkt, max_size)) < 0)
+            return ret;
+
+    *p = *pict;
+    p->pict_type= AV_PICTURE_TYPE_I;
+    p->key_frame= 1;
 
     if(avctx->pix_fmt != AV_PIX_FMT_BGR24){
         av_log(avctx, AV_LOG_ERROR, "Format not supported!\n");
         return -1;
     }
 
-    zret = deflateReset(zstream);
+    zret = deflateReset(&c->zstream);
     if (zret != Z_OK) {
         av_log(avctx, AV_LOG_ERROR, "Deflate reset error: %d\n", zret);
         return -1;
     }
-    zstream->next_out  = pkt->data;
-    zstream->avail_out = pkt->size;
+    c->zstream.next_out  = pkt->data;
+    c->zstream.avail_out = pkt->size;
 
     for(i = avctx->height - 1; i >= 0; i--) {
-        zstream->next_in  = p->data[0] + p->linesize[0] * i;
-        zstream->avail_in = avctx->width * 3;
-        zret = deflate(zstream, Z_NO_FLUSH);
+        c->zstream.next_in = p->data[0]+p->linesize[0]*i;
+        c->zstream.avail_in = avctx->width*3;
+        zret = deflate(&c->zstream, Z_NO_FLUSH);
         if (zret != Z_OK) {
             av_log(avctx, AV_LOG_ERROR, "Deflate error: %d\n", zret);
             return -1;
         }
     }
-    zret = deflate(zstream, Z_FINISH);
+    zret = deflate(&c->zstream, Z_FINISH);
     if (zret != Z_STREAM_END) {
         av_log(avctx, AV_LOG_ERROR, "Deflate error: %d\n", zret);
         return -1;
     }
 
-    pkt->size   = zstream->total_out;
+    pkt->size   = c->zstream.total_out;
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
 
     return 0;
 }
 
+/*
+ *
+ * Init lcl encoder
+ *
+ */
 static av_cold int encode_init(AVCodecContext *avctx)
 {
     LclEncContext *c = avctx->priv_data;
+    int zret; // Zlib return code
 
     c->avctx= avctx;
 
     av_assert0(avctx->width && avctx->height);
 
-    avctx->extradata = av_mallocz(8 + AV_INPUT_BUFFER_PADDING_SIZE);
-    if (!avctx->extradata)
-        return AVERROR(ENOMEM);
+    avctx->extradata= av_mallocz(8);
+    avctx->coded_frame= &c->pic;
 
     c->compression = avctx->compression_level == FF_COMPRESSION_DEFAULT ?
                             COMP_ZLIB_NORMAL :
@@ -139,29 +157,41 @@ static av_cold int encode_init(AVCodecContext *avctx)
     avctx->extradata[7]= CODEC_ZLIB;
     c->avctx->extradata_size= 8;
 
-    return ff_deflate_init(&c->zstream, c->compression, avctx);
-}
-
-static av_cold int encode_end(AVCodecContext *avctx)
-{
-    LclEncContext *c = avctx->priv_data;
-
-    ff_deflate_end(&c->zstream);
+    c->zstream.zalloc = Z_NULL;
+    c->zstream.zfree = Z_NULL;
+    c->zstream.opaque = Z_NULL;
+    zret = deflateInit(&c->zstream, c->compression);
+    if (zret != Z_OK) {
+        av_log(avctx, AV_LOG_ERROR, "Deflate init error: %d\n", zret);
+        return 1;
+    }
 
     return 0;
 }
 
-const FFCodec ff_zlib_encoder = {
-    .p.name         = "zlib",
-    CODEC_LONG_NAME("LCL (LossLess Codec Library) ZLIB"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_ZLIB,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
-                      AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+/*
+ *
+ * Uninit lcl encoder
+ *
+ */
+static av_cold int encode_end(AVCodecContext *avctx)
+{
+    LclEncContext *c = avctx->priv_data;
+
+    av_freep(&avctx->extradata);
+    deflateEnd(&c->zstream);
+
+    return 0;
+}
+
+AVCodec ff_zlib_encoder = {
+    .name           = "zlib",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_ZLIB,
     .priv_data_size = sizeof(LclEncContext),
     .init           = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
+    .encode2        = encode_frame,
     .close          = encode_end,
-    .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_BGR24, AV_PIX_FMT_NONE },
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_BGR24, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("LCL (LossLess Codec Library) ZLIB"),
 };

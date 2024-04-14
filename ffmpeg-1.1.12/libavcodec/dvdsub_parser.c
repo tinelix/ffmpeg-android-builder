@@ -32,6 +32,11 @@ typedef struct DVDSubParseContext {
     int packet_index;
 } DVDSubParseContext;
 
+static av_cold int dvdsub_parse_init(AVCodecParserContext *s)
+{
+    return 0;
+}
+
 static int dvdsub_parse(AVCodecParserContext *s,
                         AVCodecContext *avctx,
                         const uint8_t **poutbuf, int *poutbuf_size,
@@ -39,24 +44,14 @@ static int dvdsub_parse(AVCodecParserContext *s,
 {
     DVDSubParseContext *pc = s->priv_data;
 
-    *poutbuf      = buf;
-    *poutbuf_size = buf_size;
-
     if (pc->packet_index == 0) {
-        if (buf_size < 2 || (AV_RB16(buf) == 0 && buf_size < 6)) {
-            if (buf_size)
-                av_log(avctx, AV_LOG_DEBUG, "Parser input %d too small\n", buf_size);
-            return buf_size;
-        }
+        if (buf_size < 2)
+            return 0;
         pc->packet_len = AV_RB16(buf);
         if (pc->packet_len == 0) /* HD-DVD subpicture packet */
             pc->packet_len = AV_RB32(buf+2);
         av_freep(&pc->packet);
-        if ((unsigned)pc->packet_len > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) {
-            av_log(avctx, AV_LOG_ERROR, "packet length %d is invalid\n", pc->packet_len);
-            return buf_size;
-        }
-        pc->packet = av_malloc(pc->packet_len + AV_INPUT_BUFFER_PADDING_SIZE);
+        pc->packet = av_malloc(pc->packet_len);
     }
     if (pc->packet) {
         if (pc->packet_index + buf_size <= pc->packet_len) {
@@ -84,9 +79,10 @@ static av_cold void dvdsub_parse_close(AVCodecParserContext *s)
     av_freep(&pc->packet);
 }
 
-const AVCodecParser ff_dvdsub_parser = {
+AVCodecParser ff_dvdsub_parser = {
     .codec_ids      = { AV_CODEC_ID_DVD_SUBTITLE },
     .priv_data_size = sizeof(DVDSubParseContext),
+    .parser_init    = dvdsub_parse_init,
     .parser_parse   = dvdsub_parse,
     .parser_close   = dvdsub_parse_close,
 };

@@ -23,7 +23,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "pcm.h"
 #include "rso.h"
@@ -44,13 +43,13 @@ static int rso_read_header(AVFormatContext *s)
     codec = ff_codec_get_id(ff_codec_rso_tags, id);
 
     if (codec == AV_CODEC_ID_ADPCM_IMA_WAV) {
-        avpriv_report_missing_feature(s, "ADPCM in RSO");
+        av_log(s, AV_LOG_ERROR, "ADPCM in RSO not implemented\n");
         return AVERROR_PATCHWELCOME;
     }
 
     bps = av_get_bits_per_sample(codec);
     if (!bps) {
-        avpriv_request_sample(s, "Unknown bits per sample");
+        av_log_ask_for_sample(s, "could not determine bits per sample\n");
         return AVERROR_PATCHWELCOME;
     }
 
@@ -60,24 +59,25 @@ static int rso_read_header(AVFormatContext *s)
         return AVERROR(ENOMEM);
 
     st->duration            = (size * 8) / bps;
-    st->codecpar->codec_type   = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->codec_tag    = id;
-    st->codecpar->codec_id     = codec;
-    st->codecpar->ch_layout    = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
-    st->codecpar->sample_rate  = rate;
-    st->codecpar->block_align  = 1;
+    st->codec->codec_type   = AVMEDIA_TYPE_AUDIO;
+    st->codec->codec_tag    = id;
+    st->codec->codec_id     = codec;
+    st->codec->channels     = 1;
+    st->codec->channel_layout = AV_CH_LAYOUT_MONO;
+    st->codec->sample_rate  = rate;
+    st->codec->block_align  = 1;
 
     avpriv_set_pts_info(st, 64, 1, rate);
 
     return 0;
 }
 
-const FFInputFormat ff_rso_demuxer = {
-    .p.name         =   "rso",
-    .p.long_name    =   NULL_IF_CONFIG_SMALL("Lego Mindstorms RSO"),
-    .p.extensions   =   "rso",
-    .p.codec_tag    =   ff_rso_codec_tags_list,
+AVInputFormat ff_rso_demuxer = {
+    .name           =   "rso",
+    .long_name      =   NULL_IF_CONFIG_SMALL("Lego Mindstorms RSO"),
+    .extensions     =   "rso",
     .read_header    =   rso_read_header,
     .read_packet    =   ff_pcm_read_packet,
     .read_seek      =   ff_pcm_read_seek,
+    .codec_tag      =   (const AVCodecTag* const []){ff_codec_rso_tags, 0},
 };

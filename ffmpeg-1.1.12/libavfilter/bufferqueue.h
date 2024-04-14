@@ -23,7 +23,7 @@
 #define AVFILTER_BUFFERQUEUE_H
 
 /**
- * FFBufQueue: simple AVFrame queue API
+ * FFBufQueue: simple AVFilterBufferRef queue API
  *
  * Note: this API is not thread-safe. Concurrent access to the same queue
  * must be protected by a mutex or any synchronization mechanism.
@@ -37,7 +37,7 @@
  * Powers of 2 are recommended.
  */
 #ifndef FF_BUFQUEUE_SIZE
-#define FF_BUFQUEUE_SIZE 64
+#define FF_BUFQUEUE_SIZE 32
 #endif
 
 #include "avfilter.h"
@@ -47,20 +47,12 @@
  * Structure holding the queue
  */
 struct FFBufQueue {
-    AVFrame *queue[FF_BUFQUEUE_SIZE];
+    AVFilterBufferRef *queue[FF_BUFQUEUE_SIZE];
     unsigned short head;
     unsigned short available; /**< number of available buffers */
 };
 
 #define BUCKET(i) queue->queue[(queue->head + (i)) % FF_BUFQUEUE_SIZE]
-
-/**
- * Test if a buffer queue is full.
- */
-static inline int ff_bufqueue_is_full(struct FFBufQueue *queue)
-{
-    return queue->available == FF_BUFQUEUE_SIZE;
-}
 
 /**
  * Add a buffer to the queue.
@@ -69,11 +61,11 @@ static inline int ff_bufqueue_is_full(struct FFBufQueue *queue)
  * (and unrefed) with a warning before adding the new buffer.
  */
 static inline void ff_bufqueue_add(void *log, struct FFBufQueue *queue,
-                                   AVFrame *buf)
+                                   AVFilterBufferRef *buf)
 {
-    if (ff_bufqueue_is_full(queue)) {
+    if (queue->available == FF_BUFQUEUE_SIZE) {
         av_log(log, AV_LOG_WARNING, "Buffer queue overflow, dropping.\n");
-        av_frame_free(&BUCKET(--queue->available));
+        avfilter_unref_buffer(BUCKET(--queue->available));
     }
     BUCKET(queue->available++) = buf;
 }
@@ -84,8 +76,8 @@ static inline void ff_bufqueue_add(void *log, struct FFBufQueue *queue,
  * Buffer with index 0 is the first buffer in the queue.
  * Return NULL if the queue has not enough buffers.
  */
-static inline AVFrame *ff_bufqueue_peek(struct FFBufQueue *queue,
-                                        unsigned index)
+static inline AVFilterBufferRef *ff_bufqueue_peek(struct FFBufQueue *queue,
+                                                  unsigned index)
 {
     return index < queue->available ? BUCKET(index) : NULL;
 }
@@ -95,9 +87,9 @@ static inline AVFrame *ff_bufqueue_peek(struct FFBufQueue *queue,
  *
  * Do not use on an empty queue.
  */
-static inline AVFrame *ff_bufqueue_get(struct FFBufQueue *queue)
+static inline AVFilterBufferRef *ff_bufqueue_get(struct FFBufQueue *queue)
 {
-    AVFrame *ret = queue->queue[queue->head];
+    AVFilterBufferRef *ret = queue->queue[queue->head];
     av_assert0(queue->available);
     queue->available--;
     queue->queue[queue->head] = NULL;
@@ -110,10 +102,8 @@ static inline AVFrame *ff_bufqueue_get(struct FFBufQueue *queue)
  */
 static inline void ff_bufqueue_discard_all(struct FFBufQueue *queue)
 {
-    while (queue->available) {
-        AVFrame *buf = ff_bufqueue_get(queue);
-        av_frame_free(&buf);
-    }
+    while (queue->available)
+        avfilter_unref_buffer(ff_bufqueue_get(queue));
 }
 
 #undef BUCKET

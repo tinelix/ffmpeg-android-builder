@@ -21,91 +21,92 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/intreadwrite.h"
 
 static av_cold int zero12v_decode_init(AVCodecContext *avctx)
 {
-    avctx->pix_fmt             = AV_PIX_FMT_YUV422P16;
+    avctx->pix_fmt             = PIX_FMT_YUV422P16;
     avctx->bits_per_raw_sample = 10;
 
-    if (avctx->codec_tag == MKTAG('a', '1', '2', 'v'))
-        avpriv_request_sample(avctx, "transparency");
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
 
+    if (avctx->codec_tag == MKTAG('a', '1', '2', 'v'))
+        av_log_ask_for_sample(avctx, "Samples with actual transparency needed\n");
+
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
+    avctx->coded_frame->key_frame = 1;
     return 0;
 }
 
-static int zero12v_decode_frame(AVCodecContext *avctx, AVFrame *pic,
+static int zero12v_decode_frame(AVCodecContext *avctx, void *data,
                                 int *got_frame, AVPacket *avpkt)
 {
-    int line, ret;
+    int line = 0, ret;
     const int width = avctx->width;
+    AVFrame *pic = avctx->coded_frame;
     uint16_t *y, *u, *v;
     const uint8_t *line_end, *src = avpkt->data;
     int stride = avctx->width * 8 / 3;
 
-    if (width <= 1 || avctx->height <= 0) {
-        av_log(avctx, AV_LOG_ERROR, "Dimensions %dx%d not supported.\n", width, avctx->height);
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
+
+    if (width == 1) {
+        av_log(avctx, AV_LOG_ERROR, "Width 1 not supported.\n");
         return AVERROR_INVALIDDATA;
     }
-
-    if (   avctx->codec_tag == MKTAG('0', '1', '2', 'v')
-        && avpkt->size % avctx->height == 0
-        && avpkt->size / avctx->height * 3 >= width * 8)
-        stride = avpkt->size / avctx->height;
-
     if (avpkt->size < avctx->height * stride) {
         av_log(avctx, AV_LOG_ERROR, "Packet too small: %d instead of %d\n",
                avpkt->size, avctx->height * stride);
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
+    pic->reference = 0;
+    if ((ret = ff_get_buffer(avctx, pic)) < 0)
         return ret;
 
-    pic->pict_type = AV_PICTURE_TYPE_I;
-    pic->flags |= AV_FRAME_FLAG_KEY;
-
+    y = (uint16_t *)pic->data[0];
+    u = (uint16_t *)pic->data[1];
+    v = (uint16_t *)pic->data[2];
     line_end = avpkt->data + stride;
-    for (line = 0; line < avctx->height; line++) {
-        uint16_t y_temp[6] = {0x8000, 0x8000, 0x8000, 0x8000, 0x8000, 0x8000};
-        uint16_t u_temp[3] = {0x8000, 0x8000, 0x8000};
-        uint16_t v_temp[3] = {0x8000, 0x8000, 0x8000};
-        int x;
-        y = (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
-        u = (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
-        v = (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
 
-        for (x = 0; x < width; x += 6) {
-            uint32_t t;
-
-            if (width - x < 6 || line_end - src < 16) {
-                y = y_temp;
-                u = u_temp;
-                v = v_temp;
-            }
-
-            if (line_end - src < 4)
-                break;
-
-            t = AV_RL32(src);
+    while (line++ < avctx->height) {
+        while (1) {
+            uint32_t t = AV_RL32(src);
             src += 4;
             *u++ = t <<  6 & 0xFFC0;
             *y++ = t >>  4 & 0xFFC0;
             *v++ = t >> 14 & 0xFFC0;
 
-            if (line_end - src < 4)
+            if (src >= line_end - 1) {
+                *y = 0x80;
+                src++;
+                line_end += stride;
+                y = (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
+                u = (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
+                v = (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
                 break;
+            }
 
             t = AV_RL32(src);
             src += 4;
             *y++ = t <<  6 & 0xFFC0;
             *u++ = t >>  4 & 0xFFC0;
             *y++ = t >> 14 & 0xFFC0;
-
-            if (line_end - src < 4)
+            if (src >= line_end - 2) {
+                if (!(width & 1)) {
+                    *y = 0x80;
+                    src += 2;
+                }
+                line_end += stride;
+                y = (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
+                u = (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
+                v = (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
                 break;
+            }
 
             t = AV_RL32(src);
             src += 4;
@@ -113,8 +114,15 @@ static int zero12v_decode_frame(AVCodecContext *avctx, AVFrame *pic,
             *y++ = t >>  4 & 0xFFC0;
             *u++ = t >> 14 & 0xFFC0;
 
-            if (line_end - src < 4)
+            if (src >= line_end - 1) {
+                *y = 0x80;
+                src++;
+                line_end += stride;
+                y = (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
+                u = (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
+                v = (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
                 break;
+            }
 
             t = AV_RL32(src);
             src += 4;
@@ -122,34 +130,43 @@ static int zero12v_decode_frame(AVCodecContext *avctx, AVFrame *pic,
             *v++ = t >>  4 & 0xFFC0;
             *y++ = t >> 14 & 0xFFC0;
 
-            if (width - x < 6)
+            if (src >= line_end - 2) {
+                if (width & 1) {
+                    *y = 0x80;
+                    src += 2;
+                }
+                line_end += stride;
+                y = (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
+                u = (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
+                v = (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
                 break;
+            }
         }
-
-        if (x < width) {
-            y = x   + (uint16_t *)(pic->data[0] + line * pic->linesize[0]);
-            u = x/2 + (uint16_t *)(pic->data[1] + line * pic->linesize[1]);
-            v = x/2 + (uint16_t *)(pic->data[2] + line * pic->linesize[2]);
-            memcpy(y, y_temp, sizeof(*y) * (width - x));
-            memcpy(u, u_temp, sizeof(*u) * ((width - x + 1) / 2));
-            memcpy(v, v_temp, sizeof(*v) * ((width - x + 1) / 2));
-        }
-
-        line_end += stride;
-        src = line_end - stride;
     }
 
     *got_frame = 1;
+    *(AVFrame*)data= *avctx->coded_frame;
 
     return avpkt->size;
 }
 
-const FFCodec ff_zero12v_decoder = {
-    .p.name         = "012v",
-    CODEC_LONG_NAME("Uncompressed 4:2:2 10-bit"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_012V,
+static av_cold int zero12v_decode_close(AVCodecContext *avctx)
+{
+    AVFrame *pic = avctx->coded_frame;
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_zero12v_decoder = {
+    .name           = "012v",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_012V,
     .init           = zero12v_decode_init,
-    FF_CODEC_DECODE_CB(zero12v_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .close          = zero12v_decode_close,
+    .decode         = zero12v_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Uncompressed 4:2:2 10-bit"),
 };

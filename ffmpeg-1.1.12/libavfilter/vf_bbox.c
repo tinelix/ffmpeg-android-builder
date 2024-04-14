@@ -23,57 +23,40 @@
  * bounding box detection filter
  */
 
-#include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/timestamp.h"
 #include "avfilter.h"
 #include "bbox.h"
 #include "internal.h"
 
-typedef struct BBoxContext {
-    const AVClass *class;
-    int min_val;
-    int depth;
+typedef struct {
+    unsigned int frame;
+    int vsub, hsub;
 } BBoxContext;
 
-#define OFFSET(x) offsetof(BBoxContext, x)
-#define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_RUNTIME_PARAM
+static av_cold int init(AVFilterContext *ctx, const char *args)
+{
+    BBoxContext *bbox = ctx->priv;
+    bbox->frame = 0;
+    return 0;
+}
 
-static const AVOption bbox_options[] = {
-    { "min_val", "set minimum luminance value for bounding box", OFFSET(min_val), AV_OPT_TYPE_INT, { .i64 = 16 }, 0, UINT16_MAX, FLAGS },
-    { NULL }
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV420P,
+        AV_PIX_FMT_YUV444P,
+        AV_PIX_FMT_YUV440P,
+        AV_PIX_FMT_YUV422P,
+        AV_PIX_FMT_YUV411P,
+        AV_PIX_FMT_NONE,
+    };
 
-AVFILTER_DEFINE_CLASS(bbox);
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return 0;
+}
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_GRAY8, AV_PIX_FMT_GRAY9,
-    AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY14,
-    AV_PIX_FMT_GRAY16,
-    AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
-    AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
-    AV_PIX_FMT_YUV440P, AV_PIX_FMT_YUV444P,
-    AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P,
-    AV_PIX_FMT_YUVJ440P, AV_PIX_FMT_YUVJ444P,
-    AV_PIX_FMT_YUVJ411P,
-    AV_PIX_FMT_YUV420P9, AV_PIX_FMT_YUV422P9, AV_PIX_FMT_YUV444P9,
-    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
-    AV_PIX_FMT_YUV440P10,
-    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV420P12,
-    AV_PIX_FMT_YUV440P12,
-    AV_PIX_FMT_YUV444P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV420P14,
-    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
-    AV_PIX_FMT_YUVA420P,  AV_PIX_FMT_YUVA422P,   AV_PIX_FMT_YUVA444P,
-    AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
-    AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
-    AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
-    AV_PIX_FMT_NONE,
-};
-
-#define SET_META(key, value) \
-    av_dict_set_int(metadata, key, value, 0);
-
-static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
+static int filter_frame(AVFilterLink *inlink, AVFilterBufferRef *picref)
 {
     AVFilterContext *ctx = inlink->dst;
     BBoxContext *bbox = ctx->priv;
@@ -82,25 +65,16 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 
     has_bbox =
         ff_calculate_bounding_box(&box,
-                                  frame->data[0], frame->linesize[0],
-                                  inlink->w, inlink->h, bbox->min_val, bbox->depth);
+                                  picref->data[0], picref->linesize[0],
+                                  inlink->w, inlink->h, 16);
     w = box.x2 - box.x1 + 1;
     h = box.y2 - box.y1 + 1;
 
     av_log(ctx, AV_LOG_INFO,
-           "n:%"PRId64" pts:%s pts_time:%s", inlink->frame_count_out,
-           av_ts2str(frame->pts), av_ts2timestr(frame->pts, &inlink->time_base));
+           "n:%d pts:%s pts_time:%s", bbox->frame,
+           av_ts2str(picref->pts), av_ts2timestr(picref->pts, &inlink->time_base));
 
     if (has_bbox) {
-        AVDictionary **metadata = &frame->metadata;
-
-        SET_META("lavfi.bbox.x1", box.x1)
-        SET_META("lavfi.bbox.x2", box.x2)
-        SET_META("lavfi.bbox.y1", box.y1)
-        SET_META("lavfi.bbox.y2", box.y2)
-        SET_META("lavfi.bbox.w",  w)
-        SET_META("lavfi.bbox.h",  h)
-
         av_log(ctx, AV_LOG_INFO,
                " x1:%d x2:%d y1:%d y2:%d w:%d h:%d"
                " crop=%d:%d:%d:%d drawbox=%d:%d:%d:%d",
@@ -110,47 +84,35 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     }
     av_log(ctx, AV_LOG_INFO, "\n");
 
-    return ff_filter_frame(inlink->dst->outputs[0], frame);
-}
-
-static int config_output(AVFilterLink *outlink)
-{
-    AVFilterContext *ctx = outlink->src;
-    BBoxContext *s = ctx->priv;
-    const AVPixFmtDescriptor *desc;
-
-    desc = av_pix_fmt_desc_get(outlink->format);
-    if (!desc)
-        return AVERROR_BUG;
-    s->depth = desc->comp[0].depth;
-
-    return 0;
+    bbox->frame++;
+    return ff_filter_frame(inlink->dst->outputs[0], picref);
 }
 
 static const AVFilterPad bbox_inputs[] = {
     {
-        .name         = "default",
-        .type         = AVMEDIA_TYPE_VIDEO,
-        .filter_frame = filter_frame,
+        .name             = "default",
+        .type             = AVMEDIA_TYPE_VIDEO,
+        .get_video_buffer = ff_null_get_video_buffer,
+        .filter_frame     = filter_frame,
+        .min_perms        = AV_PERM_READ,
     },
+    { NULL }
 };
 
 static const AVFilterPad bbox_outputs[] = {
     {
         .name = "default",
         .type = AVMEDIA_TYPE_VIDEO,
-        .config_props = config_output,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_bbox = {
+AVFilter avfilter_vf_bbox = {
     .name          = "bbox",
     .description   = NULL_IF_CONFIG_SMALL("Compute bounding box for each frame."),
     .priv_size     = sizeof(BBoxContext),
-    .priv_class    = &bbox_class,
-    FILTER_INPUTS(bbox_inputs),
-    FILTER_OUTPUTS(bbox_outputs),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
-    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC | AVFILTER_FLAG_METADATA_ONLY,
-    .process_command = ff_filter_process_command,
+    .query_formats = query_formats,
+    .init          = init,
+    .inputs        = bbox_inputs,
+    .outputs       = bbox_outputs,
 };

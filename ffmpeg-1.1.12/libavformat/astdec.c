@@ -22,21 +22,17 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "ast.h"
 
-static int ast_probe(const AVProbeData *p)
+static int ast_probe(AVProbeData *p)
 {
-    if (AV_RL32(p->buf) != MKTAG('S','T','R','M'))
-        return 0;
-
-    if (!AV_RB16(p->buf + 10) ||
-        !AV_RB16(p->buf + 12) || AV_RB16(p->buf + 12) > 256 ||
-        !AV_RB32(p->buf + 16) || AV_RB32(p->buf + 16) > 8*48000)
-        return AVPROBE_SCORE_MAX / 8;
-
-    return AVPROBE_SCORE_MAX / 3 * 2;
+    if (AV_RL32(p->buf) == MKTAG('S','T','R','M') &&
+        AV_RB16(p->buf + 10) &&
+        AV_RB16(p->buf + 12) &&
+        AV_RB32(p->buf + 16))
+        return AVPROBE_SCORE_MAX / 3 * 2;
+    return 0;
 }
 
 static int ast_read_header(AVFormatContext *s)
@@ -49,32 +45,32 @@ static int ast_read_header(AVFormatContext *s)
         return AVERROR(ENOMEM);
 
     avio_skip(s->pb, 8);
-    st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->codec_id   = ff_codec_get_id(ff_codec_ast_tags, avio_rb16(s->pb));
+    st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+    st->codec->codec_id   = ff_codec_get_id(ff_codec_ast_tags, avio_rb16(s->pb));
 
     depth = avio_rb16(s->pb);
     if (depth != 16) {
-        avpriv_request_sample(s, "depth %d", depth);
+        av_log_ask_for_sample(s, "unsupported depth %d\n", depth);
         return AVERROR_INVALIDDATA;
     }
 
-    st->codecpar->ch_layout.nb_channels = avio_rb16(s->pb);
-    if (!st->codecpar->ch_layout.nb_channels)
+    st->codec->channels = avio_rb16(s->pb);
+    if (!st->codec->channels)
         return AVERROR_INVALIDDATA;
 
-    if (st->codecpar->ch_layout.nb_channels == 2)
-        st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-    else if (st->codecpar->ch_layout.nb_channels == 4)
-        st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_4POINT0;
+    if (st->codec->channels == 2)
+        st->codec->channel_layout = AV_CH_LAYOUT_STEREO;
+    else if (st->codec->channels == 4)
+        st->codec->channel_layout = AV_CH_LAYOUT_4POINT0;
 
     avio_skip(s->pb, 2);
-    st->codecpar->sample_rate = avio_rb32(s->pb);
-    if (st->codecpar->sample_rate <= 0)
+    st->codec->sample_rate = avio_rb32(s->pb);
+    if (st->codec->sample_rate <= 0)
         return AVERROR_INVALIDDATA;
     st->start_time         = 0;
     st->duration           = avio_rb32(s->pb);
     avio_skip(s->pb, 40);
-    avpriv_set_pts_info(st, 64, 1, st->codecpar->sample_rate);
+    avpriv_set_pts_info(st, 64, 1, st->codec->sample_rate);
 
     return 0;
 }
@@ -85,17 +81,16 @@ static int ast_read_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t pos;
     int ret;
 
-    if (avio_feof(s->pb))
+    if (url_feof(s->pb))
         return AVERROR_EOF;
 
     pos  = avio_tell(s->pb);
     type = avio_rl32(s->pb);
     size = avio_rb32(s->pb);
-    if (!s->streams[0]->codecpar->ch_layout.nb_channels ||
-        size > INT_MAX / s->streams[0]->codecpar->ch_layout.nb_channels)
+    if (size > INT_MAX / s->streams[0]->codec->channels)
         return AVERROR_INVALIDDATA;
 
-    size *= s->streams[0]->codecpar->ch_layout.nb_channels;
+    size *= s->streams[0]->codec->channels;
     if ((ret = avio_skip(s->pb, 24)) < 0) // padding
         return ret;
 
@@ -104,7 +99,7 @@ static int ast_read_packet(AVFormatContext *s, AVPacket *pkt)
         pkt->stream_index = 0;
         pkt->pos = pos;
     } else {
-        av_log(s, AV_LOG_ERROR, "unknown chunk %"PRIx32"\n", type);
+        av_log(s, AV_LOG_ERROR, "unknown chunk %x\n", type);
         avio_skip(s->pb, size);
         ret = AVERROR_INVALIDDATA;
     }
@@ -112,13 +107,13 @@ static int ast_read_packet(AVFormatContext *s, AVPacket *pkt)
     return ret;
 }
 
-const FFInputFormat ff_ast_demuxer = {
-    .p.name         = "ast",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("AST (Audio Stream)"),
-    .p.extensions   = "ast",
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.codec_tag    = ff_ast_codec_tags_list,
+AVInputFormat ff_ast_demuxer = {
+    .name           = "ast",
+    .long_name      = NULL_IF_CONFIG_SMALL("AST (Audio Stream)"),
     .read_probe     = ast_probe,
     .read_header    = ast_read_header,
     .read_packet    = ast_read_packet,
+    .extensions     = "ast",
+    .flags          = AVFMT_GENERIC_INDEX,
+    .codec_tag      = (const AVCodecTag* const []){ff_codec_ast_tags, 0},
 };

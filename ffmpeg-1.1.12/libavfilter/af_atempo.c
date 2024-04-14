@@ -39,12 +39,13 @@
  */
 
 #include <float.h>
+#include "libavcodec/avfft.h"
 #include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
-#include "libavutil/mem.h"
+#include "libavutil/eval.h"
 #include "libavutil/opt.h"
 #include "libavutil/samplefmt.h"
-#include "libavutil/tx.h"
 #include "avfilter.h"
 #include "audio.h"
 #include "internal.h"
@@ -52,7 +53,7 @@
 /**
  * A fragment of audio waveform
  */
-typedef struct AudioFragment {
+typedef struct {
     // index of the first sample of this fragment in the overall waveform;
     // 0: input sample position
     // 1: output sample position
@@ -66,8 +67,7 @@ typedef struct AudioFragment {
 
     // rDFT transform of the down-mixed mono fragment, used for
     // fast waveform alignment via correlation in frequency domain:
-    float *xdat_in;
-    float *xdat;
+    FFTSample *xdat;
 } AudioFragment;
 
 /**
@@ -84,9 +84,7 @@ typedef enum {
 /**
  * Filter state machine
  */
-typedef struct ATempoContext {
-    const AVClass *class;
-
+typedef struct {
     // ring-buffer of input samples, necessary because some times
     // input fragment position may be adjusted backwards:
     uint8_t *buffer;
@@ -102,9 +100,6 @@ typedef struct ATempoContext {
     // 0: input sample position corresponding to the ring buffer tail
     // 1: output sample position
     int64_t position[2];
-
-    // first input timestamp, all other timestamps are offset by this one
-    int64_t start_pts;
 
     // sample format:
     enum AVSampleFormat format;
@@ -126,9 +121,8 @@ typedef struct ATempoContext {
     // tempo scaling factor:
     double tempo;
 
-    // a snapshot of previous fragment input and output position values
-    // captured when the tempo scale factor was set most recently:
-    int64_t origin[2];
+    // cumulative alignment drift:
+    int drift;
 
     // current/previous fragment ring-buffer:
     AudioFragment frag[2];
@@ -140,45 +134,18 @@ typedef struct ATempoContext {
     FilterState state;
 
     // for fast correlation calculation in frequency domain:
-    AVTXContext *real_to_complex;
-    AVTXContext *complex_to_real;
-    av_tx_fn r2c_fn, c2r_fn;
-    float *correlation_in;
-    float *correlation;
+    RDFTContext *real_to_complex;
+    RDFTContext *complex_to_real;
+    FFTSample *correlation;
 
     // for managing AVFilterPad.request_frame and AVFilterPad.filter_frame
-    AVFrame *dst_buffer;
+    int request_fulfilled;
+    AVFilterBufferRef *dst_buffer;
     uint8_t *dst;
     uint8_t *dst_end;
     uint64_t nsamples_in;
     uint64_t nsamples_out;
 } ATempoContext;
-
-#define YAE_ATEMPO_MIN 0.5
-#define YAE_ATEMPO_MAX 100.0
-
-#define OFFSET(x) offsetof(ATempoContext, x)
-
-static const AVOption atempo_options[] = {
-    { "tempo", "set tempo scale factor",
-      OFFSET(tempo), AV_OPT_TYPE_DOUBLE, { .dbl = 1.0 },
-      YAE_ATEMPO_MIN,
-      YAE_ATEMPO_MAX,
-      AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_RUNTIME_PARAM },
-    { NULL }
-};
-
-AVFILTER_DEFINE_CLASS(atempo);
-
-inline static AudioFragment *yae_curr_frag(ATempoContext *atempo)
-{
-    return &atempo->frag[atempo->nfrag % 2];
-}
-
-inline static AudioFragment *yae_prev_frag(ATempoContext *atempo)
-{
-    return &atempo->frag[(atempo->nfrag + 1) % 2];
-}
 
 /**
  * Reset filter to initial state, do not deallocate existing local buffers.
@@ -189,15 +156,12 @@ static void yae_clear(ATempoContext *atempo)
     atempo->head = 0;
     atempo->tail = 0;
 
+    atempo->drift = 0;
     atempo->nfrag = 0;
     atempo->state = YAE_LOAD_FRAGMENT;
-    atempo->start_pts = AV_NOPTS_VALUE;
 
     atempo->position[0] = 0;
     atempo->position[1] = 0;
-
-    atempo->origin[0] = 0;
-    atempo->origin[1] = 0;
 
     atempo->frag[0].position[0] = 0;
     atempo->frag[0].position[1] = 0;
@@ -213,10 +177,11 @@ static void yae_clear(ATempoContext *atempo)
     atempo->frag[0].position[0] = -(int64_t)(atempo->window / 2);
     atempo->frag[0].position[1] = -(int64_t)(atempo->window / 2);
 
-    av_frame_free(&atempo->dst_buffer);
+    avfilter_unref_bufferp(&atempo->dst_buffer);
     atempo->dst     = NULL;
     atempo->dst_end = NULL;
 
+    atempo->request_fulfilled = 0;
     atempo->nsamples_in       = 0;
     atempo->nsamples_out      = 0;
 }
@@ -230,26 +195,26 @@ static void yae_release_buffers(ATempoContext *atempo)
 
     av_freep(&atempo->frag[0].data);
     av_freep(&atempo->frag[1].data);
-    av_freep(&atempo->frag[0].xdat_in);
-    av_freep(&atempo->frag[1].xdat_in);
     av_freep(&atempo->frag[0].xdat);
     av_freep(&atempo->frag[1].xdat);
 
     av_freep(&atempo->buffer);
     av_freep(&atempo->hann);
-    av_freep(&atempo->correlation_in);
     av_freep(&atempo->correlation);
 
-    av_tx_uninit(&atempo->real_to_complex);
-    av_tx_uninit(&atempo->complex_to_real);
+    av_rdft_end(atempo->real_to_complex);
+    atempo->real_to_complex = NULL;
+
+    av_rdft_end(atempo->complex_to_real);
+    atempo->complex_to_real = NULL;
 }
 
 /* av_realloc is not aligned enough; fortunately, the data does not need to
  * be preserved */
-#define RE_MALLOC_OR_FAIL(field, field_size, element_size)      \
+#define RE_MALLOC_OR_FAIL(field, field_size)                    \
     do {                                                        \
         av_freep(&field);                                       \
-        field = av_calloc(field_size, element_size);            \
+        field = av_malloc(field_size);                          \
         if (!field) {                                           \
             yae_release_buffers(atempo);                        \
             return AVERROR(ENOMEM);                             \
@@ -267,7 +232,6 @@ static int yae_reset(ATempoContext *atempo,
 {
     const int sample_size = av_get_bytes_per_sample(format);
     uint32_t nlevels  = 0;
-    float scale = 1.f, iscale = 1.f;
     uint32_t pot;
     int i;
 
@@ -289,37 +253,37 @@ static int yae_reset(ATempoContext *atempo,
     }
 
     // initialize audio fragment buffers:
-    RE_MALLOC_OR_FAIL(atempo->frag[0].data, atempo->window, atempo->stride);
-    RE_MALLOC_OR_FAIL(atempo->frag[1].data, atempo->window, atempo->stride);
-    RE_MALLOC_OR_FAIL(atempo->frag[0].xdat_in, (atempo->window + 1), sizeof(AVComplexFloat));
-    RE_MALLOC_OR_FAIL(atempo->frag[1].xdat_in, (atempo->window + 1), sizeof(AVComplexFloat));
-    RE_MALLOC_OR_FAIL(atempo->frag[0].xdat, (atempo->window + 1), sizeof(AVComplexFloat));
-    RE_MALLOC_OR_FAIL(atempo->frag[1].xdat, (atempo->window + 1), sizeof(AVComplexFloat));
+    RE_MALLOC_OR_FAIL(atempo->frag[0].data, atempo->window * atempo->stride);
+    RE_MALLOC_OR_FAIL(atempo->frag[1].data, atempo->window * atempo->stride);
+    RE_MALLOC_OR_FAIL(atempo->frag[0].xdat, atempo->window * sizeof(FFTComplex));
+    RE_MALLOC_OR_FAIL(atempo->frag[1].xdat, atempo->window * sizeof(FFTComplex));
 
     // initialize rDFT contexts:
-    av_tx_uninit(&atempo->real_to_complex);
-    av_tx_uninit(&atempo->complex_to_real);
+    av_rdft_end(atempo->real_to_complex);
+    atempo->real_to_complex = NULL;
 
-    av_tx_init(&atempo->real_to_complex, &atempo->r2c_fn, AV_TX_FLOAT_RDFT, 0, 1 << (nlevels + 1), &scale, 0);
+    av_rdft_end(atempo->complex_to_real);
+    atempo->complex_to_real = NULL;
+
+    atempo->real_to_complex = av_rdft_init(nlevels + 1, DFT_R2C);
     if (!atempo->real_to_complex) {
         yae_release_buffers(atempo);
         return AVERROR(ENOMEM);
     }
 
-    av_tx_init(&atempo->complex_to_real, &atempo->c2r_fn, AV_TX_FLOAT_RDFT, 1, 1 << (nlevels + 1), &iscale, 0);
+    atempo->complex_to_real = av_rdft_init(nlevels + 1, IDFT_C2R);
     if (!atempo->complex_to_real) {
         yae_release_buffers(atempo);
         return AVERROR(ENOMEM);
     }
 
-    RE_MALLOC_OR_FAIL(atempo->correlation_in, (atempo->window + 1), sizeof(AVComplexFloat));
-    RE_MALLOC_OR_FAIL(atempo->correlation, atempo->window, sizeof(AVComplexFloat));
+    RE_MALLOC_OR_FAIL(atempo->correlation, atempo->window * sizeof(FFTComplex));
 
     atempo->ring = atempo->window * 3;
-    RE_MALLOC_OR_FAIL(atempo->buffer, atempo->ring, atempo->stride);
+    RE_MALLOC_OR_FAIL(atempo->buffer, atempo->ring * atempo->stride);
 
     // initialize the Hann window function:
-    RE_MALLOC_OR_FAIL(atempo->hann, atempo->window, sizeof(float));
+    RE_MALLOC_OR_FAIL(atempo->hann, atempo->window * sizeof(float));
 
     for (i = 0; i < atempo->window; i++) {
         double t = (double)i / (double)(atempo->window - 1);
@@ -331,15 +295,35 @@ static int yae_reset(ATempoContext *atempo,
     return 0;
 }
 
-static int yae_update(AVFilterContext *ctx)
+static int yae_set_tempo(AVFilterContext *ctx, const char *arg_tempo)
 {
-    const AudioFragment *prev;
     ATempoContext *atempo = ctx->priv;
+    char   *tail = NULL;
+    double tempo = av_strtod(arg_tempo, &tail);
 
-    prev = yae_prev_frag(atempo);
-    atempo->origin[0] = prev->position[0] + atempo->window / 2;
-    atempo->origin[1] = prev->position[1] + atempo->window / 2;
+    if (tail && *tail) {
+        av_log(ctx, AV_LOG_ERROR, "Invalid tempo value '%s'\n", arg_tempo);
+        return AVERROR(EINVAL);
+    }
+
+    if (tempo < 0.5 || tempo > 2.0) {
+        av_log(ctx, AV_LOG_ERROR, "Tempo value %f exceeds [0.5, 2.0] range\n",
+               tempo);
+        return AVERROR(EINVAL);
+    }
+
+    atempo->tempo = tempo;
     return 0;
+}
+
+inline static AudioFragment *yae_curr_frag(ATempoContext *atempo)
+{
+    return &atempo->frag[atempo->nfrag % 2];
+}
+
+inline static AudioFragment *yae_prev_frag(ATempoContext *atempo)
+{
+    return &atempo->frag[(atempo->nfrag + 1) % 2];
 }
 
 /**
@@ -351,7 +335,7 @@ static int yae_update(AVFilterContext *ctx)
         const uint8_t *src_end = src +                                  \
             frag->nsamples * atempo->channels * sizeof(scalar_type);    \
                                                                         \
-        float *xdat = frag->xdat_in;                                    \
+        FFTSample *xdat = frag->xdat;                                   \
         scalar_type tmp;                                                \
                                                                         \
         if (atempo->channels == 1) {                                    \
@@ -359,27 +343,27 @@ static int yae_update(AVFilterContext *ctx)
                 tmp = *(const scalar_type *)src;                        \
                 src += sizeof(scalar_type);                             \
                                                                         \
-                *xdat = (float)tmp;                                     \
+                *xdat = (FFTSample)tmp;                                 \
             }                                                           \
         } else {                                                        \
-            float s, max, ti, si;                                       \
+            FFTSample s, max, ti, si;                                   \
             int i;                                                      \
                                                                         \
             for (; src < src_end; xdat++) {                             \
                 tmp = *(const scalar_type *)src;                        \
                 src += sizeof(scalar_type);                             \
                                                                         \
-                max = (float)tmp;                                       \
-                s = FFMIN((float)scalar_max,                            \
-                          (float)fabsf(max));                           \
+                max = (FFTSample)tmp;                                   \
+                s = FFMIN((FFTSample)scalar_max,                        \
+                          (FFTSample)fabsf(max));                       \
                                                                         \
                 for (i = 1; i < atempo->channels; i++) {                \
                     tmp = *(const scalar_type *)src;                    \
                     src += sizeof(scalar_type);                         \
                                                                         \
-                    ti = (float)tmp;                                    \
-                    si = FFMIN((float)scalar_max,                       \
-                               (float)fabsf(ti));                       \
+                    ti = (FFTSample)tmp;                                \
+                    si = FFMIN((FFTSample)scalar_max,                   \
+                               (FFTSample)fabsf(ti));                   \
                                                                         \
                     if (s < si) {                                       \
                         s   = si;                                       \
@@ -402,7 +386,7 @@ static void yae_downmix(ATempoContext *atempo, AudioFragment *frag)
     const uint8_t *src = frag->data;
 
     // init complex data buffer used for FFT and Correlation:
-    memset(frag->xdat_in, 0, sizeof(AVComplexFloat) * (atempo->window + 1));
+    memset(frag->xdat, 0, sizeof(FFTComplex) * atempo->window);
 
     if (atempo->format == AV_SAMPLE_FMT_U8) {
         yae_init_xdat(uint8_t, 127);
@@ -437,8 +421,8 @@ static int yae_load_data(ATempoContext *atempo,
         return 0;
     }
 
-    // samples are not expected to be skipped, unless tempo is greater than 2:
-    av_assert0(read_size <= atempo->ring || atempo->tempo > 2.0);
+    // samples are not expected to be skipped:
+    av_assert0(read_size <= atempo->ring);
 
     while (atempo->position[0] < stop_here && src < src_end) {
         int src_samples = (src_end - src) / atempo->stride;
@@ -530,19 +514,19 @@ static int yae_load_frag(ATempoContext *atempo,
     dst = frag->data;
 
     start = atempo->position[0] - atempo->size;
+    zeros = 0;
 
-    // what we don't have we substitute with zeros:
-    zeros =
-      frag->position[0] < start ?
-      FFMIN(start - frag->position[0], (int64_t)nsamples) : 0;
+    if (frag->position[0] < start) {
+        // what we don't have we substitute with zeros:
+        zeros = FFMIN(start - frag->position[0], (int64_t)nsamples);
+        av_assert0(zeros != nsamples);
+
+        memset(dst, 0, zeros * atempo->stride);
+        dst += zeros * atempo->stride;
+    }
 
     if (zeros == nsamples) {
         return 0;
-    }
-
-    if (frag->position[0] < start) {
-        memset(dst, 0, zeros * atempo->stride);
-        dst += zeros * atempo->stride;
     }
 
     // get the remaining data from the ring buffer:
@@ -601,24 +585,32 @@ static void yae_advance_to_next_frag(ATempoContext *atempo)
  * Multiply two vectors of complex numbers (result of real_to_complex rDFT)
  * and transform back via complex_to_real rDFT.
  */
-static void yae_xcorr_via_rdft(float *xcorr_in,
-                               float *xcorr,
-                               AVTXContext *complex_to_real,
-                               av_tx_fn c2r_fn,
-                               const AVComplexFloat *xa,
-                               const AVComplexFloat *xb,
+static void yae_xcorr_via_rdft(FFTSample *xcorr,
+                               RDFTContext *complex_to_real,
+                               const FFTComplex *xa,
+                               const FFTComplex *xb,
                                const int window)
 {
-    AVComplexFloat *xc = (AVComplexFloat *)xcorr_in;
+    FFTComplex *xc = (FFTComplex *)xcorr;
     int i;
 
-    for (i = 0; i <= window; i++, xa++, xb++, xc++) {
+    // NOTE: first element requires special care -- Given Y = rDFT(X),
+    // Im(Y[0]) and Im(Y[N/2]) are always zero, therefore av_rdft_calc
+    // stores Re(Y[N/2]) in place of Im(Y[0]).
+
+    xc->re = xa->re * xb->re;
+    xc->im = xa->im * xb->im;
+    xa++;
+    xb++;
+    xc++;
+
+    for (i = 1; i < window; i++, xa++, xb++, xc++) {
         xc->re = (xa->re * xb->re + xa->im * xb->im);
         xc->im = (xa->im * xb->re - xa->re * xb->im);
     }
 
     // apply inverse rDFT:
-    c2r_fn(complex_to_real, xcorr, xcorr_in, sizeof(*xc));
+    av_rdft_calc(complex_to_real, xcorr);
 }
 
 /**
@@ -632,25 +624,21 @@ static int yae_align(AudioFragment *frag,
                      const int window,
                      const int delta_max,
                      const int drift,
-                     float *correlation_in,
-                     float *correlation,
-                     AVTXContext *complex_to_real,
-                     av_tx_fn c2r_fn)
+                     FFTSample *correlation,
+                     RDFTContext *complex_to_real)
 {
     int       best_offset = -drift;
-    float     best_metric = -FLT_MAX;
-    float    *xcorr;
+    FFTSample best_metric = -FLT_MAX;
+    FFTSample *xcorr;
 
     int i0;
     int i1;
     int i;
 
-    yae_xcorr_via_rdft(correlation_in,
-                       correlation,
+    yae_xcorr_via_rdft(correlation,
                        complex_to_real,
-                       c2r_fn,
-                       (const AVComplexFloat *)prev->xdat,
-                       (const AVComplexFloat *)frag->xdat,
+                       (const FFTComplex *)prev->xdat,
+                       (const FFTComplex *)frag->xdat,
                        window);
 
     // identify search window boundaries:
@@ -664,11 +652,11 @@ static int yae_align(AudioFragment *frag,
     xcorr = correlation + i0;
 
     for (i = i0; i < i1; i++, xcorr++) {
-        float metric = *xcorr;
+        FFTSample metric = *xcorr;
 
         // normalize:
-        float drifti = (float)(drift + i);
-        metric *= drifti * (float)(i - i0) * (float)(i1 - i);
+        FFTSample drifti = (FFTSample)(drift + i);
+        metric *= drifti * (FFTSample)(i - i0) * (FFTSample)(i1 - i);
 
         if (metric > best_metric) {
             best_metric = metric;
@@ -690,25 +678,14 @@ static int yae_adjust_position(ATempoContext *atempo)
     const AudioFragment *prev = yae_prev_frag(atempo);
     AudioFragment       *frag = yae_curr_frag(atempo);
 
-    const double prev_output_position =
-        (double)(prev->position[1] - atempo->origin[1] + atempo->window / 2) *
-        atempo->tempo;
-
-    const double ideal_output_position =
-        (double)(prev->position[0] - atempo->origin[0] + atempo->window / 2);
-
-    const int drift = (int)(prev_output_position - ideal_output_position);
-
     const int delta_max  = atempo->window / 2;
     const int correction = yae_align(frag,
                                      prev,
                                      atempo->window,
                                      delta_max,
-                                     drift,
-                                     atempo->correlation_in,
+                                     atempo->drift,
                                      atempo->correlation,
-                                     atempo->complex_to_real,
-                                     atempo->c2r_fn);
+                                     atempo->complex_to_real);
 
     if (correction) {
         // adjust fragment position:
@@ -716,6 +693,9 @@ static int yae_adjust_position(ATempoContext *atempo)
 
         // clear so that the fragment can be reloaded:
         frag->nsamples = 0;
+
+        // update cumulative correction drift counter:
+        atempo->drift += correction;
     }
 
     return correction;
@@ -834,7 +814,7 @@ yae_apply(ATempoContext *atempo,
             yae_downmix(atempo, yae_curr_frag(atempo));
 
             // apply rDFT:
-            atempo->r2c_fn(atempo->real_to_complex, yae_curr_frag(atempo)->xdat, yae_curr_frag(atempo)->xdat_in, sizeof(float));
+            av_rdft_calc(atempo->real_to_complex, yae_curr_frag(atempo)->xdat);
 
             // must load the second fragment before alignment can start:
             if (!atempo->nfrag) {
@@ -866,7 +846,7 @@ yae_apply(ATempoContext *atempo,
             yae_downmix(atempo, yae_curr_frag(atempo));
 
             // apply rDFT:
-            atempo->r2c_fn(atempo->real_to_complex, yae_curr_frag(atempo)->xdat, yae_curr_frag(atempo)->xdat_in, sizeof(float));
+            av_rdft_calc(atempo->real_to_complex, yae_curr_frag(atempo)->xdat);
 
             atempo->state = YAE_OUTPUT_OVERLAP_ADD;
         }
@@ -910,11 +890,6 @@ static int yae_flush(ATempoContext *atempo,
 
     atempo->state = YAE_FLUSH_OUTPUT;
 
-    if (!atempo->nfrag) {
-        // there is nothing to flush:
-        return 0;
-    }
-
     if (atempo->position[0] == frag->position[0] + frag->nsamples &&
         atempo->position[1] == frag->position[1] + frag->nsamples) {
         // the current fragment is already flushed:
@@ -930,7 +905,7 @@ static int yae_flush(ATempoContext *atempo,
             yae_downmix(atempo, frag);
 
             // apply rDFT:
-            atempo->r2c_fn(atempo->real_to_complex, frag->xdat, frag->xdat_in, sizeof(float));
+            av_rdft_calc(atempo->real_to_complex, frag->xdat);
 
             // align current fragment to previous fragment:
             if (yae_adjust_position(atempo)) {
@@ -950,13 +925,7 @@ static int yae_flush(ATempoContext *atempo,
         }
     }
 
-    // check whether all of the input samples have been consumed:
-    if (frag->position[0] + frag->nsamples < atempo->position[0]) {
-        yae_advance_to_next_frag(atempo);
-        return AVERROR(EAGAIN);
-    }
-
-    // flush the remainder of the current fragment:
+    // flush the remaininder of the current fragment:
     start_here = FFMAX(atempo->position[1], overlap_end);
     stop_here  = frag->position[1] + frag->nsamples;
     offset     = start_here - frag->position[1];
@@ -980,12 +949,16 @@ static int yae_flush(ATempoContext *atempo,
     return atempo->position[1] == stop_here ? 0 : AVERROR(EAGAIN);
 }
 
-static av_cold int init(AVFilterContext *ctx)
+static av_cold int init(AVFilterContext *ctx, const char *args)
 {
     ATempoContext *atempo = ctx->priv;
+
+    // NOTE: this assumes that the caller has memset ctx->priv to 0:
     atempo->format = AV_SAMPLE_FMT_NONE;
+    atempo->tempo  = 1.0;
     atempo->state  = YAE_LOAD_FRAGMENT;
-    return 0;
+
+    return args ? yae_set_tempo(ctx, args) : 0;
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
@@ -993,6 +966,11 @@ static av_cold void uninit(AVFilterContext *ctx)
     ATempoContext *atempo = ctx->priv;
     yae_release_buffers(atempo);
 }
+
+static int query_formats(AVFilterContext *ctx)
+{
+    AVFilterChannelLayouts *layouts = NULL;
+    AVFilterFormats        *formats = NULL;
 
     // WSOLA necessitates an internal sliding window ring buffer
     // for incoming audio stream.
@@ -1009,6 +987,27 @@ static av_cold void uninit(AVFilterContext *ctx)
         AV_SAMPLE_FMT_NONE
     };
 
+    layouts = ff_all_channel_layouts();
+    if (!layouts) {
+        return AVERROR(ENOMEM);
+    }
+    ff_set_common_channel_layouts(ctx, layouts);
+
+    formats = ff_make_format_list(sample_fmts);
+    if (!formats) {
+        return AVERROR(ENOMEM);
+    }
+    ff_set_common_formats(ctx, formats);
+
+    formats = ff_all_samplerates();
+    if (!formats) {
+        return AVERROR(ENOMEM);
+    }
+    ff_set_common_samplerates(ctx, formats);
+
+    return 0;
+}
+
 static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext  *ctx = inlink->dst;
@@ -1016,62 +1015,51 @@ static int config_props(AVFilterLink *inlink)
 
     enum AVSampleFormat format = inlink->format;
     int sample_rate = (int)inlink->sample_rate;
+    int channels = av_get_channel_layout_nb_channels(inlink->channel_layout);
 
-    return yae_reset(atempo, format, sample_rate, inlink->ch_layout.nb_channels);
+    return yae_reset(atempo, format, sample_rate, channels);
 }
 
-static int push_samples(ATempoContext *atempo,
-                        AVFilterLink *outlink,
-                        int n_out)
+static void push_samples(ATempoContext *atempo,
+                         AVFilterLink *outlink,
+                         int n_out)
 {
-    int ret;
-
-    atempo->dst_buffer->sample_rate = outlink->sample_rate;
-    atempo->dst_buffer->nb_samples  = n_out;
+    atempo->dst_buffer->audio->sample_rate = outlink->sample_rate;
+    atempo->dst_buffer->audio->nb_samples  = n_out;
 
     // adjust the PTS:
-    atempo->dst_buffer->pts = atempo->start_pts +
+    atempo->dst_buffer->pts =
         av_rescale_q(atempo->nsamples_out,
                      (AVRational){ 1, outlink->sample_rate },
                      outlink->time_base);
 
-    ret = ff_filter_frame(outlink, atempo->dst_buffer);
+    ff_filter_frame(outlink, atempo->dst_buffer);
     atempo->dst_buffer = NULL;
     atempo->dst        = NULL;
     atempo->dst_end    = NULL;
-    if (ret < 0)
-        return ret;
 
     atempo->nsamples_out += n_out;
-    return 0;
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *src_buffer)
+static int filter_frame(AVFilterLink *inlink,
+                           AVFilterBufferRef *src_buffer)
 {
     AVFilterContext  *ctx = inlink->dst;
     ATempoContext *atempo = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
 
-    int ret = 0;
-    int n_in = src_buffer->nb_samples;
+    int n_in = src_buffer->audio->nb_samples;
     int n_out = (int)(0.5 + ((double)n_in) / atempo->tempo);
 
     const uint8_t *src = src_buffer->data[0];
     const uint8_t *src_end = src + n_in * atempo->stride;
 
-    if (atempo->start_pts == AV_NOPTS_VALUE)
-        atempo->start_pts = av_rescale_q(src_buffer->pts,
-                                         inlink->time_base,
-                                         outlink->time_base);
-
     while (src < src_end) {
         if (!atempo->dst_buffer) {
-            atempo->dst_buffer = ff_get_audio_buffer(outlink, n_out);
-            if (!atempo->dst_buffer) {
-                av_frame_free(&src_buffer);
-                return AVERROR(ENOMEM);
-            }
-            av_frame_copy_props(atempo->dst_buffer, src_buffer);
+            atempo->dst_buffer = ff_get_audio_buffer(outlink,
+                                                     AV_PERM_WRITE,
+                                                     n_out);
+            avfilter_copy_buffer_ref_props(atempo->dst_buffer, src_buffer);
 
             atempo->dst = atempo->dst_buffer->data[0];
             atempo->dst_end = atempo->dst + n_out * atempo->stride;
@@ -1080,18 +1068,14 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *src_buffer)
         yae_apply(atempo, &src, src_end, &atempo->dst, atempo->dst_end);
 
         if (atempo->dst == atempo->dst_end) {
-            int n_samples = ((atempo->dst - atempo->dst_buffer->data[0]) /
-                             atempo->stride);
-            ret = push_samples(atempo, outlink, n_samples);
-            if (ret < 0)
-                goto end;
+            push_samples(atempo, outlink, n_out);
+            atempo->request_fulfilled = 1;
         }
     }
 
     atempo->nsamples_in += n_in;
-end:
-    av_frame_free(&src_buffer);
-    return ret;
+    avfilter_unref_bufferp(&src_buffer);
+    return 0;
 }
 
 static int request_frame(AVFilterLink *outlink)
@@ -1100,7 +1084,11 @@ static int request_frame(AVFilterLink *outlink)
     ATempoContext *atempo = ctx->priv;
     int ret;
 
-    ret = ff_request_frame(ctx->inputs[0]);
+    atempo->request_fulfilled = 0;
+    do {
+        ret = ff_request_frame(ctx->inputs[0]);
+    }
+    while (!atempo->request_fulfilled && ret >= 0);
 
     if (ret == AVERROR_EOF) {
         // flush the filter:
@@ -1110,9 +1098,9 @@ static int request_frame(AVFilterLink *outlink)
 
         while (err == AVERROR(EAGAIN)) {
             if (!atempo->dst_buffer) {
-                atempo->dst_buffer = ff_get_audio_buffer(outlink, n_max);
-                if (!atempo->dst_buffer)
-                    return AVERROR(ENOMEM);
+                atempo->dst_buffer = ff_get_audio_buffer(outlink,
+                                                         AV_PERM_WRITE,
+                                                         n_max);
 
                 atempo->dst = atempo->dst_buffer->data[0];
                 atempo->dst_end = atempo->dst + n_max * atempo->stride;
@@ -1124,13 +1112,11 @@ static int request_frame(AVFilterLink *outlink)
                      atempo->stride);
 
             if (n_out) {
-                ret = push_samples(atempo, outlink, n_out);
-                if (ret < 0)
-                    return ret;
+                push_samples(atempo, outlink, n_out);
             }
         }
 
-        av_frame_free(&atempo->dst_buffer);
+        avfilter_unref_bufferp(&atempo->dst_buffer);
         atempo->dst     = NULL;
         atempo->dst_end = NULL;
 
@@ -1147,12 +1133,7 @@ static int process_command(AVFilterContext *ctx,
                            int res_len,
                            int flags)
 {
-    int ret = ff_filter_process_command(ctx, cmd, arg, res, res_len, flags);
-
-    if (ret < 0)
-        return ret;
-
-    return yae_update(ctx);
+    return !strcmp(cmd, "tempo") ? yae_set_tempo(ctx, arg) : AVERROR(ENOSYS);
 }
 
 static const AVFilterPad atempo_inputs[] = {
@@ -1161,7 +1142,9 @@ static const AVFilterPad atempo_inputs[] = {
         .type         = AVMEDIA_TYPE_AUDIO,
         .filter_frame = filter_frame,
         .config_props = config_props,
+        .min_perms    = AV_PERM_READ,
     },
+    { NULL }
 };
 
 static const AVFilterPad atempo_outputs[] = {
@@ -1170,17 +1153,17 @@ static const AVFilterPad atempo_outputs[] = {
         .request_frame = request_frame,
         .type          = AVMEDIA_TYPE_AUDIO,
     },
+    { NULL }
 };
 
-const AVFilter ff_af_atempo = {
+AVFilter avfilter_af_atempo = {
     .name            = "atempo",
     .description     = NULL_IF_CONFIG_SMALL("Adjust audio tempo."),
     .init            = init,
     .uninit          = uninit,
+    .query_formats   = query_formats,
     .process_command = process_command,
     .priv_size       = sizeof(ATempoContext),
-    .priv_class      = &atempo_class,
-    FILTER_INPUTS(atempo_inputs),
-    FILTER_OUTPUTS(atempo_outputs),
-    FILTER_SAMPLEFMTS_ARRAY(sample_fmts),
+    .inputs          = atempo_inputs,
+    .outputs         = atempo_outputs,
 };

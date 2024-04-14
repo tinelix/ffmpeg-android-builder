@@ -23,21 +23,19 @@
 #include "avio_internal.h"
 #include "id3v1.h"
 #include "id3v2.h"
-#include "mux.h"
 #include "rawenc.h"
 #include "libavutil/avstring.h"
-#include "libavutil/mem.h"
 #include "libavcodec/mpegaudio.h"
 #include "libavcodec/mpegaudiodata.h"
 #include "libavcodec/mpegaudiodecheader.h"
-#include "libavcodec/packet_internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/opt.h"
+#include "libavcodec/mpegaudio.h"
+#include "libavcodec/mpegaudiodata.h"
+#include "libavcodec/mpegaudiodecheader.h"
+#include "libavformat/avio_internal.h"
 #include "libavutil/dict.h"
 #include "libavutil/avassert.h"
-#include "libavutil/crc.h"
-#include "libavutil/mathematics.h"
-#include "libavutil/replaygain.h"
 
 static int id3v1_set_string(AVFormatContext *s, const char *key,
                             uint8_t *buf, int buf_size)
@@ -48,7 +46,6 @@ static int id3v1_set_string(AVFormatContext *s, const char *key,
     return !!tag;
 }
 
-// refer to: http://id3.org/ID3v1
 static int id3v1_create_tag(AVFormatContext *s, uint8_t *buf)
 {
     AVDictionaryEntry *tag;
@@ -62,17 +59,7 @@ static int id3v1_create_tag(AVFormatContext *s, uint8_t *buf)
     count += id3v1_set_string(s, "TIT2",    buf +  3, 30 + 1);       //title
     count += id3v1_set_string(s, "TPE1",    buf + 33, 30 + 1);       //author|artist
     count += id3v1_set_string(s, "TALB",    buf + 63, 30 + 1);       //album
-    if ((tag = av_dict_get(s->metadata, "TYER", NULL, 0))) {         //year
-        av_strlcpy(buf + 93, tag->value, 4 + 1);
-        count++;
-    } else if ((tag = av_dict_get(s->metadata, "TDRC", NULL, 0))) {
-        av_strlcpy(buf + 93, tag->value, 4 + 1);
-        count++;
-    } else if ((tag = av_dict_get(s->metadata, "TDAT", NULL, 0))) {
-        av_strlcpy(buf + 93, tag->value, 4 + 1);
-        count++;
-    }
-
+    count += id3v1_set_string(s, "TDRL",    buf + 93,  4 + 1);       //date
     count += id3v1_set_string(s, "comment", buf + 97, 30 + 1);
     if ((tag = av_dict_get(s->metadata, "TRCK", NULL, 0))) { //track
         buf[125] = 0;
@@ -94,29 +81,17 @@ static int id3v1_create_tag(AVFormatContext *s, uint8_t *buf)
 
 #define XING_NUM_BAGS 400
 #define XING_TOC_SIZE 100
-// size of the XING/LAME data, starting from the Xing tag
-#define XING_SIZE 156
+// maximum size of the xing frame: offset/Xing/flags/frames/size/TOC
+#define XING_MAX_SIZE (32 + 4 + 4 + 4 + 4 + XING_TOC_SIZE)
 
 typedef struct MP3Context {
     const AVClass *class;
     ID3v2EncContext id3;
     int id3v2_version;
     int write_id3v1;
-    int write_xing;
 
     /* xing header */
-    // a buffer containing the whole XING/LAME frame
-    uint8_t *xing_frame;
-    int      xing_frame_size;
-
-    AVCRC    audio_crc;     // CRC of the audio data
-    uint32_t audio_size;    // total size of the audio data
-
-    // offset of the XING/LAME frame in the file
-    int64_t  xing_frame_offset;
-    // offset of the XING/INFO tag in the frame
-    int xing_offset;
-
+    int64_t xing_offset;
     int32_t frames;
     int32_t size;
     uint32_t want;
@@ -125,8 +100,6 @@ typedef struct MP3Context {
     uint64_t bag[XING_NUM_BAGS];
     int initial_bitrate;
     int has_variable_bitrate;
-    int delay;
-    int padding;
 
     /* index of the audio stream */
     int audio_stream_idx;
@@ -134,7 +107,7 @@ typedef struct MP3Context {
     int pics_to_write;
 
     /* audio packets are queued here until we get all the attached pictures */
-    PacketList queue;
+    AVPacketList *queue, *queue_end;
 } MP3Context;
 
 static const uint8_t xing_offtbl[2][2] = {{32, 17}, {17, 9}};
@@ -145,39 +118,38 @@ static const uint8_t xing_offtbl[2][2] = {{32, 17}, {17, 9}};
 static int mp3_write_xing(AVFormatContext *s)
 {
     MP3Context       *mp3 = s->priv_data;
-    AVCodecParameters *par = s->streams[mp3->audio_stream_idx]->codecpar;
-    AVDictionaryEntry *enc = av_dict_get(s->streams[mp3->audio_stream_idx]->metadata, "encoder", NULL, 0);
-    AVIOContext *dyn_ctx;
-    int32_t        header;
+    AVCodecContext *codec = s->streams[mp3->audio_stream_idx]->codec;
+    int32_t          header;
     MPADecodeHeader  mpah;
     int srate_idx, i, channels;
     int bitrate_idx;
     int best_bitrate_idx = -1;
     int best_bitrate_error = INT_MAX;
-    int ret;
+    int xing_offset;
     int ver = 0;
     int bytes_needed;
+    const char *vendor = (codec->flags & CODEC_FLAG_BITEXACT) ? "Lavf" : LIBAVFORMAT_IDENT;
 
-    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL) || !mp3->write_xing)
+    if (!s->pb->seekable)
         return 0;
 
-    for (i = 0; i < FF_ARRAY_ELEMS(ff_mpa_freq_tab); i++) {
-        const uint16_t base_freq = ff_mpa_freq_tab[i];
+    for (i = 0; i < FF_ARRAY_ELEMS(avpriv_mpa_freq_tab); i++) {
+        const uint16_t base_freq = avpriv_mpa_freq_tab[i];
 
-        if      (par->sample_rate == base_freq)     ver = 0x3; // MPEG 1
-        else if (par->sample_rate == base_freq / 2) ver = 0x2; // MPEG 2
-        else if (par->sample_rate == base_freq / 4) ver = 0x0; // MPEG 2.5
+        if      (codec->sample_rate == base_freq)     ver = 0x3; // MPEG 1
+        else if (codec->sample_rate == base_freq / 2) ver = 0x2; // MPEG 2
+        else if (codec->sample_rate == base_freq / 4) ver = 0x0; // MPEG 2.5
         else continue;
 
         srate_idx = i;
         break;
     }
-    if (i == FF_ARRAY_ELEMS(ff_mpa_freq_tab)) {
+    if (i == FF_ARRAY_ELEMS(avpriv_mpa_freq_tab)) {
         av_log(s, AV_LOG_WARNING, "Unsupported sample rate, not writing Xing header.\n");
         return -1;
     }
 
-    switch (par->ch_layout.nb_channels) {
+    switch (codec->channels) {
     case 1:  channels = MPA_MONO;                                          break;
     case 2:  channels = MPA_STEREO;                                        break;
     default: av_log(s, AV_LOG_WARNING, "Unsupported number of channels, "
@@ -192,8 +164,8 @@ static int mp3_write_xing(AVFormatContext *s)
     header |= channels << 6;
 
     for (bitrate_idx = 1; bitrate_idx < 15; bitrate_idx++) {
-        int bit_rate = 1000 * ff_mpa_bitrate_tab[ver != 3][3 - 1][bitrate_idx];
-        int error    = FFABS(bit_rate - par->bit_rate);
+        int bit_rate = 1000 * avpriv_mpa_bitrate_tab[ver != 3][3 - 1][bitrate_idx];
+        int error    = FFABS(bit_rate - codec->bit_rate);
 
         if (error < best_bitrate_error) {
             best_bitrate_error = error;
@@ -208,10 +180,17 @@ static int mp3_write_xing(AVFormatContext *s)
             return -1;
         header |= mask;
 
-        ret = avpriv_mpegaudio_decode_header(&mpah, header);
-        av_assert0(ret >= 0);
-        mp3->xing_offset = xing_offtbl[mpah.lsf == 1][mpah.nb_channels == 1] + 4;
-        bytes_needed     = mp3->xing_offset + XING_SIZE;
+        avpriv_mpegaudio_decode_header(&mpah, header);
+        xing_offset=xing_offtbl[mpah.lsf == 1][mpah.nb_channels == 1];
+        bytes_needed = 4              // header
+               + xing_offset
+               + 4              // xing tag
+               + 4              // frames/size/toc flags
+               + 4              // frames
+               + 4              // size
+               + XING_TOC_SIZE   // toc
+               + 24
+               ;
 
         if (bytes_needed <= mpah.frame_size)
             break;
@@ -219,68 +198,32 @@ static int mp3_write_xing(AVFormatContext *s)
         header &= ~mask;
     }
 
-    ret = avio_open_dyn_buf(&dyn_ctx);
-    if (ret < 0)
-        return ret;
+    avio_wb32(s->pb, header);
 
-    avio_wb32(dyn_ctx, header);
-
-    ffio_fill(dyn_ctx, 0, mp3->xing_offset - 4);
-    ffio_wfourcc(dyn_ctx, "Xing");
-    avio_wb32(dyn_ctx, 0x01 | 0x02 | 0x04 | 0x08);  // frames / size / TOC / vbr scale
+    ffio_fill(s->pb, 0, xing_offset);
+    mp3->xing_offset = avio_tell(s->pb);
+    ffio_wfourcc(s->pb, "Xing");
+    avio_wb32(s->pb, 0x01 | 0x02 | 0x04);  // frames / size / TOC
 
     mp3->size = mpah.frame_size;
     mp3->want=1;
     mp3->seen=0;
     mp3->pos=0;
 
-    avio_wb32(dyn_ctx, 0);  // frames
-    avio_wb32(dyn_ctx, 0);  // size
+    avio_wb32(s->pb, 0);  // frames
+    avio_wb32(s->pb, 0);  // size
 
-    // TOC
-    for (i = 0; i < XING_TOC_SIZE; i++)
-        avio_w8(dyn_ctx, (uint8_t)(255 * i / XING_TOC_SIZE));
+    // toc
+    for (i = 0; i < XING_TOC_SIZE; ++i)
+        avio_w8(s->pb, (uint8_t)(255 * i / XING_TOC_SIZE));
 
-    // vbr quality
-    // we write it, because some (broken) tools always expect it to be present
-    avio_wb32(dyn_ctx, 0);
+    for (i = 0; i < strlen(vendor); ++i)
+        avio_w8(s->pb, vendor[i]);
+    for (; i < 21; ++i)
+        avio_w8(s->pb, 0);
+    avio_wb24(s->pb, FFMAX(codec->delay - 528 - 1, 0)<<12);
 
-    // encoder short version string
-    if (enc) {
-        uint8_t encoder_str[9] = { 0 };
-        if (   strlen(enc->value) > sizeof(encoder_str)
-            && !strcmp("Lavc libmp3lame", enc->value)) {
-            memcpy(encoder_str, "Lavf lame", 9);
-        } else
-            memcpy(encoder_str, enc->value, FFMIN(strlen(enc->value), sizeof(encoder_str)));
-
-        avio_write(dyn_ctx, encoder_str, sizeof(encoder_str));
-    } else
-        avio_write(dyn_ctx, "Lavf\0\0\0\0\0", 9);
-
-    avio_w8(dyn_ctx, 0);      // tag revision 0 / unknown vbr method
-    avio_w8(dyn_ctx, 0);      // unknown lowpass filter value
-    ffio_fill(dyn_ctx, 0, 8); // empty replaygain fields
-    avio_w8(dyn_ctx, 0);      // unknown encoding flags
-    avio_w8(dyn_ctx, 0);      // unknown abr/minimal bitrate
-    avio_wb24(dyn_ctx, 0);    // empty encoder delay/padding
-
-    avio_w8(dyn_ctx,   0); // misc
-    avio_w8(dyn_ctx,   0); // mp3gain
-    avio_wb16(dyn_ctx, 0); // preset
-
-    // audio length and CRCs (will be updated later)
-    avio_wb32(dyn_ctx, 0); // music length
-    avio_wb16(dyn_ctx, 0); // music crc
-    avio_wb16(dyn_ctx, 0); // tag crc
-
-    ffio_fill(dyn_ctx, 0, mpah.frame_size - bytes_needed);
-
-    mp3->xing_frame_size   = avio_close_dyn_buf(dyn_ctx, &mp3->xing_frame);
-    mp3->xing_frame_offset = avio_tell(s->pb);
-    avio_write(s->pb, mp3->xing_frame, mp3->xing_frame_size);
-
-    mp3->audio_size = mp3->xing_frame_size;
+    ffio_fill(s->pb, 0, mpah.frame_size - bytes_needed);
 
     return 0;
 }
@@ -321,21 +264,20 @@ static int mp3_write_audio_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (pkt->data && pkt->size >= 4) {
         MPADecodeHeader mpah;
-        int ret;
         int av_unused base;
-        uint32_t h;
+        uint32_t head = AV_RB32(pkt->data);
 
-        h = AV_RB32(pkt->data);
-        ret = avpriv_mpegaudio_decode_header(&mpah, h);
-        if (ret >= 0) {
-            if (!mp3->initial_bitrate)
-                mp3->initial_bitrate = mpah.bit_rate;
-            if ((mpah.bit_rate == 0) || (mp3->initial_bitrate != mpah.bit_rate))
-                mp3->has_variable_bitrate = 1;
-        } else {
-            av_log(s, AV_LOG_WARNING, "Audio packet of size %d (starting with %08"PRIX32"...) "
-                   "is invalid, writing it anyway.\n", pkt->size, h);
+        if (ff_mpa_check_header(head) < 0) {
+            av_log(s, AV_LOG_WARNING, "Audio packet of size %d (starting with %08X...) "
+                   "is invalid, writing it anyway.\n", pkt->size, head);
+            return ff_raw_write_packet(s, pkt);
         }
+        avpriv_mpegaudio_decode_header(&mpah, head);
+
+        if (!mp3->initial_bitrate)
+            mp3->initial_bitrate = mpah.bit_rate;
+        if ((mpah.bit_rate == 0) || (mp3->initial_bitrate != mpah.bit_rate))
+            mp3->has_variable_bitrate = 1;
 
 #ifdef FILTER_VBR_HEADERS
         /* filter out XING and INFO headers. */
@@ -355,26 +297,8 @@ static int mp3_write_audio_packet(AVFormatContext *s, AVPacket *pkt)
             return 0;
 #endif
 
-        if (mp3->xing_offset) {
-            uint8_t *side_data = NULL;
-            size_t side_data_size;
-
+        if (mp3->xing_offset)
             mp3_xing_add_frame(mp3, pkt);
-            mp3->audio_size += pkt->size;
-            mp3->audio_crc   = av_crc(av_crc_get_table(AV_CRC_16_ANSI_LE),
-                                      mp3->audio_crc, pkt->data, pkt->size);
-
-            side_data = av_packet_get_side_data(pkt,
-                                                AV_PKT_DATA_SKIP_SAMPLES,
-                                                &side_data_size);
-            if (side_data && side_data_size >= 10) {
-                mp3->padding = FFMAX(AV_RL32(side_data + 4) + 528 + 1, 0);
-                if (!mp3->delay)
-                    mp3->delay =  FFMAX(AV_RL32(side_data) - 528 - 1, 0);
-            } else {
-                mp3->padding = 0;
-            }
-        }
     }
 
     return ff_raw_write_packet(s, pkt);
@@ -383,92 +307,47 @@ static int mp3_write_audio_packet(AVFormatContext *s, AVPacket *pkt)
 static int mp3_queue_flush(AVFormatContext *s)
 {
     MP3Context *mp3 = s->priv_data;
-    AVPacket *const pkt = ffformatcontext(s)->pkt;
+    AVPacketList *pktl;
     int ret = 0, write = 1;
 
-    ff_id3v2_finish(&mp3->id3, s->pb, s->metadata_header_padding);
+    ff_id3v2_finish(&mp3->id3, s->pb);
     mp3_write_xing(s);
 
-    while (mp3->queue.head) {
-        avpriv_packet_list_get(&mp3->queue, pkt);
-        if (write && (ret = mp3_write_audio_packet(s, pkt)) < 0)
+    while ((pktl = mp3->queue)) {
+        if (write && (ret = mp3_write_audio_packet(s, &pktl->pkt)) < 0)
             write = 0;
-        av_packet_unref(pkt);
+        av_free_packet(&pktl->pkt);
+        mp3->queue = pktl->next;
+        av_freep(&pktl);
     }
+    mp3->queue_end = NULL;
     return ret;
 }
 
 static void mp3_update_xing(AVFormatContext *s)
 {
     MP3Context  *mp3 = s->priv_data;
-    const AVPacketSideData *sd;
-    AVReplayGain *rg;
-    uint16_t tag_crc;
-    uint8_t *toc;
     int i;
-    int64_t old_pos = avio_tell(s->pb);
 
     /* replace "Xing" identification string with "Info" for CBR files. */
-    if (!mp3->has_variable_bitrate)
-        AV_WL32(mp3->xing_frame + mp3->xing_offset, MKTAG('I', 'n', 'f', 'o'));
+    if (!mp3->has_variable_bitrate) {
+        avio_seek(s->pb, mp3->xing_offset, SEEK_SET);
+        ffio_wfourcc(s->pb, "Info");
+    }
 
-    AV_WB32(mp3->xing_frame + mp3->xing_offset + 8,  mp3->frames);
-    AV_WB32(mp3->xing_frame + mp3->xing_offset + 12, mp3->size);
+    avio_seek(s->pb, mp3->xing_offset + 8, SEEK_SET);
+    avio_wb32(s->pb, mp3->frames);
+    avio_wb32(s->pb, mp3->size);
 
-    toc    = mp3->xing_frame + mp3->xing_offset + 16;
-    toc[0] = 0;  // first toc entry has to be zero.
+    avio_w8(s->pb, 0);  // first toc entry has to be zero.
+
     for (i = 1; i < XING_TOC_SIZE; ++i) {
         int j = i * mp3->pos / XING_TOC_SIZE;
         int seek_point = 256LL * mp3->bag[j] / mp3->size;
-        toc[i] = FFMIN(seek_point, 255);
+        avio_w8(s->pb, FFMIN(seek_point, 255));
     }
 
-    /* write replaygain */
-    sd = av_packet_side_data_get(s->streams[0]->codecpar->coded_side_data,
-                                 s->streams[0]->codecpar->nb_coded_side_data,
-                                 AV_PKT_DATA_REPLAYGAIN);
-    if (sd && sd->size >= sizeof(*rg)) {
-        uint16_t val;
-
-        rg = (AVReplayGain *)sd->data;
-        AV_WB32(mp3->xing_frame + mp3->xing_offset + 131,
-                av_rescale(rg->track_peak, 1 << 23, 100000));
-
-        if (rg->track_gain != INT32_MIN) {
-            val  = FFABS(rg->track_gain / 10000) & ((1 << 9) - 1);
-            val |= (rg->track_gain < 0) << 9;
-            val |= 1 << 13;
-            AV_WB16(mp3->xing_frame + mp3->xing_offset + 135, val);
-        }
-
-        if (rg->album_gain != INT32_MIN) {
-            val  = FFABS(rg->album_gain / 10000) & ((1 << 9) - 1);
-            val |= (rg->album_gain < 0) << 9;
-            val |= 1 << 14;
-            AV_WB16(mp3->xing_frame + mp3->xing_offset + 137, val);
-        }
-    }
-
-    /* write encoder delay/padding */
-    if (mp3->delay >= 1 << 12) {
-        mp3->delay = (1 << 12) - 1;
-        av_log(s, AV_LOG_WARNING, "Too many samples of initial padding.\n");
-    }
-    if (mp3->padding >= 1 << 12) {
-        mp3->padding = (1 << 12) - 1;
-        av_log(s, AV_LOG_WARNING, "Too many samples of trailing padding.\n");
-    }
-    AV_WB24(mp3->xing_frame + mp3->xing_offset + 141, (mp3->delay << 12) + mp3->padding);
-
-    AV_WB32(mp3->xing_frame + mp3->xing_offset + XING_SIZE - 8, mp3->audio_size);
-    AV_WB16(mp3->xing_frame + mp3->xing_offset + XING_SIZE - 4, mp3->audio_crc);
-
-    tag_crc = av_crc(av_crc_get_table(AV_CRC_16_ANSI_LE), 0, mp3->xing_frame, 190);
-    AV_WB16(mp3->xing_frame + mp3->xing_offset + XING_SIZE - 2, tag_crc);
-
-    avio_seek(s->pb,  mp3->xing_frame_offset, SEEK_SET);
-    avio_write(s->pb, mp3->xing_frame, mp3->xing_frame_size);
-    avio_seek(s->pb, old_pos, SEEK_SET);
+    avio_seek(s->pb, 0, SEEK_END);
 }
 
 static int mp3_write_trailer(struct AVFormatContext *s)
@@ -496,25 +375,34 @@ static int mp3_write_trailer(struct AVFormatContext *s)
 static int query_codec(enum AVCodecID id, int std_compliance)
 {
     const CodecMime *cm= ff_id3v2_mime_tags;
-
-    if (id == AV_CODEC_ID_MP3)
-        return 1;
-
     while(cm->id != AV_CODEC_ID_NONE) {
         if(id == cm->id)
             return MKTAG('A', 'P', 'I', 'C');
         cm++;
     }
-    return 0;
+    return -1;
 }
+
+#if CONFIG_MP2_MUXER
+AVOutputFormat ff_mp2_muxer = {
+    .name              = "mp2",
+    .long_name         = NULL_IF_CONFIG_SMALL("MP2 (MPEG audio layer 2)"),
+    .mime_type         = "audio/x-mpeg",
+    .extensions        = "mp2,m2a",
+    .audio_codec       = AV_CODEC_ID_MP2,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
+#if CONFIG_MP3_MUXER
 
 static const AVOption options[] = {
     { "id3v2_version", "Select ID3v2 version to write. Currently 3 and 4 are supported.",
-      offsetof(MP3Context, id3v2_version), AV_OPT_TYPE_INT, {.i64 = 4}, 0, 4, AV_OPT_FLAG_ENCODING_PARAM},
+      offsetof(MP3Context, id3v2_version), AV_OPT_TYPE_INT, {.i64 = 4}, 3, 4, AV_OPT_FLAG_ENCODING_PARAM},
     { "write_id3v1", "Enable ID3v1 writing. ID3v1 tags are written in UTF-8 which may not be supported by most software.",
-      offsetof(MP3Context, write_id3v1), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
-    { "write_xing",  "Write the Xing header containing file duration.",
-      offsetof(MP3Context, write_xing),  AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
+      offsetof(MP3Context, write_id3v1), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { NULL },
 };
 
@@ -532,14 +420,18 @@ static int mp3_write_packet(AVFormatContext *s, AVPacket *pkt)
     if (pkt->stream_index == mp3->audio_stream_idx) {
         if (mp3->pics_to_write) {
             /* buffer audio packets until we get all the pictures */
-            int ret = avpriv_packet_list_put(&mp3->queue, pkt, NULL, 0);
+            AVPacketList *pktl = av_mallocz(sizeof(*pktl));
+            if (!pktl)
+                return AVERROR(ENOMEM);
 
-            if (ret < 0) {
-                av_log(s, AV_LOG_WARNING, "Not enough memory to buffer audio. Skipping picture streams\n");
-                mp3->pics_to_write = 0;
-                mp3_queue_flush(s);
-                return mp3_write_audio_packet(s, pkt);
-            }
+            pktl->pkt     = *pkt;
+            pkt->destruct = NULL;
+
+            if (mp3->queue_end)
+                mp3->queue_end->next = pktl;
+            else
+                mp3->queue = pktl;
+            mp3->queue_end = pktl;
         } else
             return mp3_write_audio_packet(s, pkt);
     } else {
@@ -570,32 +462,24 @@ static int mp3_write_packet(AVFormatContext *s, AVPacket *pkt)
  * Write an ID3v2 header at beginning of stream
  */
 
-static int mp3_init(struct AVFormatContext *s)
+static int mp3_write_header(struct AVFormatContext *s)
 {
     MP3Context  *mp3 = s->priv_data;
-    int i;
-
-    if (mp3->id3v2_version      &&
-        mp3->id3v2_version != 3 &&
-        mp3->id3v2_version != 4) {
-        av_log(s, AV_LOG_ERROR, "Invalid ID3v2 version requested: %d. Only "
-               "3, 4 or 0 (disabled) are allowed.\n", mp3->id3v2_version);
-        return AVERROR(EINVAL);
-    }
+    int ret, i;
 
     /* check the streams -- we want exactly one audio and arbitrary number of
      * video (attached pictures) */
     mp3->audio_stream_idx = -1;
     for (i = 0; i < s->nb_streams; i++) {
         AVStream *st = s->streams[i];
-        if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            if (mp3->audio_stream_idx >= 0 || st->codecpar->codec_id != AV_CODEC_ID_MP3) {
+        if (st->codec->codec_type == AVMEDIA_TYPE_AUDIO) {
+            if (mp3->audio_stream_idx >= 0 || st->codec->codec_id != AV_CODEC_ID_MP3) {
                 av_log(s, AV_LOG_ERROR, "Invalid audio stream. Exactly one MP3 "
                        "audio stream is required.\n");
                 return AVERROR(EINVAL);
             }
             mp3->audio_stream_idx = i;
-        } else if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+        } else if (st->codec->codec_type != AVMEDIA_TYPE_VIDEO) {
             av_log(s, AV_LOG_ERROR, "Only audio streams and pictures are allowed in MP3.\n");
             return AVERROR(EINVAL);
         }
@@ -606,58 +490,32 @@ static int mp3_init(struct AVFormatContext *s)
     }
     mp3->pics_to_write = s->nb_streams - 1;
 
-    if (mp3->pics_to_write && !mp3->id3v2_version) {
-        av_log(s, AV_LOG_ERROR, "Attached pictures were requested, but the "
-               "ID3v2 header is disabled.\n");
-        return AVERROR(EINVAL);
-    }
-
-    return 0;
-}
-
-static int mp3_write_header(struct AVFormatContext *s)
-{
-    MP3Context  *mp3 = s->priv_data;
-    int ret;
-
-    if (mp3->id3v2_version) {
-        ff_id3v2_start(&mp3->id3, s->pb, mp3->id3v2_version, ID3v2_DEFAULT_MAGIC);
-        ret = ff_id3v2_write_metadata(s, &mp3->id3);
-        if (ret < 0)
-            return ret;
-    }
+    ff_id3v2_start(&mp3->id3, s->pb, mp3->id3v2_version, ID3v2_DEFAULT_MAGIC);
+    ret = ff_id3v2_write_metadata(s, &mp3->id3);
+    if (ret < 0)
+        return ret;
 
     if (!mp3->pics_to_write) {
-        if (mp3->id3v2_version)
-            ff_id3v2_finish(&mp3->id3, s->pb, s->metadata_header_padding);
+        ff_id3v2_finish(&mp3->id3, s->pb);
         mp3_write_xing(s);
     }
 
     return 0;
 }
 
-static void mp3_deinit(struct AVFormatContext *s)
-{
-    MP3Context *mp3 = s->priv_data;
-
-    avpriv_packet_list_free(&mp3->queue);
-    av_freep(&mp3->xing_frame);
-}
-
-const FFOutputFormat ff_mp3_muxer = {
-    .p.name            = "mp3",
-    .p.long_name       = NULL_IF_CONFIG_SMALL("MP3 (MPEG audio layer 3)"),
-    .p.mime_type       = "audio/mpeg",
-    .p.extensions      = "mp3",
+AVOutputFormat ff_mp3_muxer = {
+    .name              = "mp3",
+    .long_name         = NULL_IF_CONFIG_SMALL("MP3 (MPEG audio layer 3)"),
+    .mime_type         = "audio/x-mpeg",
+    .extensions        = "mp3",
     .priv_data_size    = sizeof(MP3Context),
-    .p.audio_codec     = AV_CODEC_ID_MP3,
-    .p.video_codec     = AV_CODEC_ID_PNG,
-    .init              = mp3_init,
+    .audio_codec       = AV_CODEC_ID_MP3,
+    .video_codec       = AV_CODEC_ID_PNG,
     .write_header      = mp3_write_header,
     .write_packet      = mp3_write_packet,
     .write_trailer     = mp3_write_trailer,
-    .deinit            = mp3_deinit,
     .query_codec       = query_codec,
-    .p.flags           = AVFMT_NOTIMESTAMPS,
-    .p.priv_class      = &mp3_muxer_class,
+    .flags             = AVFMT_NOTIMESTAMPS,
+    .priv_class        = &mp3_muxer_class,
 };
+#endif

@@ -1,6 +1,6 @@
 /*
  * RTMP packet utilities
- * Copyright (c) 2009 Konstantin Shishkov
+ * Copyright (c) 2009 Kostya Shishkov
  *
  * This file is part of FFmpeg.
  *
@@ -36,9 +36,9 @@
 enum RTMPChannel {
     RTMP_NETWORK_CHANNEL = 2,   ///< channel for network-related messages (bandwidth report, ping, etc)
     RTMP_SYSTEM_CHANNEL,        ///< channel for sending server control messages
+    RTMP_SOURCE_CHANNEL,        ///< channel for sending a/v to server
+    RTMP_VIDEO_CHANNEL = 8,     ///< channel for video data
     RTMP_AUDIO_CHANNEL,         ///< channel for audio data
-    RTMP_VIDEO_CHANNEL   = 6,   ///< channel for video data
-    RTMP_SOURCE_CHANNEL  = 8,   ///< channel for a/v invokes
 };
 
 /**
@@ -47,9 +47,9 @@ enum RTMPChannel {
 typedef enum RTMPPacketType {
     RTMP_PT_CHUNK_SIZE   =  1,  ///< chunk size change
     RTMP_PT_BYTES_READ   =  3,  ///< number of bytes read
-    RTMP_PT_USER_CONTROL,       ///< user control
-    RTMP_PT_WINDOW_ACK_SIZE,    ///< window acknowledgement size
-    RTMP_PT_SET_PEER_BW,        ///< peer bandwidth
+    RTMP_PT_PING,               ///< ping
+    RTMP_PT_SERVER_BW,          ///< server bandwidth
+    RTMP_PT_CLIENT_BW,          ///< client bandwidth
     RTMP_PT_AUDIO        =  8,  ///< audio packet
     RTMP_PT_VIDEO,              ///< video packet
     RTMP_PT_FLEX_STREAM  = 15,  ///< Flex shared stream
@@ -78,12 +78,10 @@ typedef struct RTMPPacket {
     int            channel_id; ///< RTMP channel ID (nothing to do with audio/video channels though)
     RTMPPacketType type;       ///< packet payload type
     uint32_t       timestamp;  ///< packet full timestamp
-    uint32_t       ts_field;   ///< 24-bit timestamp or increment to the previous one, in milliseconds (latter only for media packets). Clipped to a maximum of 0xFFFFFF, indicating an extended timestamp field.
+    uint32_t       ts_delta;   ///< timestamp increment to the previous one in milliseconds (latter only for media packets)
     uint32_t       extra;      ///< probably an additional channel ID used during streaming data
     uint8_t        *data;      ///< packet payload
     int            size;       ///< packet payload size
-    int            offset;     ///< amount of data read so far
-    int            read;       ///< amount read, including headers
 } RTMPPacket;
 
 /**
@@ -114,12 +112,10 @@ void ff_rtmp_packet_destroy(RTMPPacket *pkt);
  * @param chunk_size current chunk size
  * @param prev_pkt   previously read packet headers for all channels
  *                   (may be needed for restoring incomplete packet header)
- * @param nb_prev_pkt number of allocated elements in prev_pkt
  * @return number of bytes read on success, negative value otherwise
  */
 int ff_rtmp_packet_read(URLContext *h, RTMPPacket *p,
-                        int chunk_size, RTMPPacket **prev_pkt,
-                        int *nb_prev_pkt);
+                        int chunk_size, RTMPPacket *prev_pkt);
 /**
  * Read internal RTMP packet sent by the server.
  *
@@ -128,13 +124,11 @@ int ff_rtmp_packet_read(URLContext *h, RTMPPacket *p,
  * @param chunk_size current chunk size
  * @param prev_pkt   previously read packet headers for all channels
  *                   (may be needed for restoring incomplete packet header)
- * @param nb_prev_pkt number of allocated elements in prev_pkt
  * @param c          the first byte already read
  * @return number of bytes read on success, negative value otherwise
  */
 int ff_rtmp_packet_read_internal(URLContext *h, RTMPPacket *p, int chunk_size,
-                                 RTMPPacket **prev_pkt, int *nb_prev_pkt,
-                                 uint8_t c);
+                                 RTMPPacket *prev_pkt, uint8_t c);
 
 /**
  * Send RTMP packet to the server.
@@ -144,12 +138,10 @@ int ff_rtmp_packet_read_internal(URLContext *h, RTMPPacket *p, int chunk_size,
  * @param chunk_size current chunk size
  * @param prev_pkt   previously sent packet headers for all channels
  *                   (may be used for packet header compressing)
- * @param nb_prev_pkt number of allocated elements in prev_pkt
  * @return number of bytes written on success, negative value otherwise
  */
 int ff_rtmp_packet_write(URLContext *h, RTMPPacket *p,
-                         int chunk_size, RTMPPacket **prev_pkt,
-                         int *nb_prev_pkt);
+                         int chunk_size, RTMPPacket *prev_pkt);
 
 /**
  * Print information and contents of RTMP packet.
@@ -158,16 +150,6 @@ int ff_rtmp_packet_write(URLContext *h, RTMPPacket *p,
  * @param p          packet to dump
  */
 void ff_rtmp_packet_dump(void *ctx, RTMPPacket *p);
-
-/**
- * Enlarge the prev_pkt array to fit the given channel
- *
- * @param prev_pkt    array with previously sent packet headers
- * @param nb_prev_pkt number of allocated elements in prev_pkt
- * @param channel     the channel number that needs to be allocated
- */
-int ff_rtmp_check_alloc_array(RTMPPacket **prev_pkt, int *nb_prev_pkt,
-                              int channel);
 
 /**
  * @name Functions used to work with the AMF format (which is also used in .flv)
@@ -245,14 +227,6 @@ void ff_amf_write_null(uint8_t **dst);
 void ff_amf_write_object_start(uint8_t **dst);
 
 /**
- * Write marker and length for AMF array to buffer.
- *
- * @param dst pointer to the input buffer (will be modified)
- * @param length value to write
- */
-void ff_amf_write_array_start(uint8_t **dst, uint32_t length);
-
-/**
  * Write string used as field name in AMF object to buffer.
  *
  * @param dst pointer to the input buffer (will be modified)
@@ -268,6 +242,15 @@ void ff_amf_write_field_name(uint8_t **dst, const char *str);
 void ff_amf_write_object_end(uint8_t **dst);
 
 /**
+ * Read AMF boolean value.
+ *
+ *@param[in,out] gbc GetByteContext initialized with AMF-formatted data
+ *@param[out]    val 0 or 1
+ *@return 0 on success or an AVERROR code on failure
+*/
+int ff_amf_read_bool(GetByteContext *gbc, int *val);
+
+/**
  * Read AMF number value.
  *
  *@param[in,out] gbc GetByteContext initialized with AMF-formatted data
@@ -275,23 +258,6 @@ void ff_amf_write_object_end(uint8_t **dst);
  *@return 0 on success or an AVERROR code on failure
 */
 int ff_amf_read_number(GetByteContext *gbc, double *val);
-
-/**
- * Get AMF string value.
- *
- * This function behaves the same as ff_amf_read_string except that
- * it does not expect the AMF type prepended to the actual data.
- * Appends a trailing null byte to output string in order to
- * ease later parsing.
- *
- *@param[in,out] gbc     GetByteContext initialized with AMF-formatted data
- *@param[out]    str     read string
- *@param[in]     strsize buffer size available to store the read string
- *@param[out]    length  read string length
- *@return 0 on success or an AVERROR code on failure
-*/
-int ff_amf_get_string(GetByteContext *bc, uint8_t *str,
-                      int strsize, int *length);
 
 /**
  * Read AMF string value.

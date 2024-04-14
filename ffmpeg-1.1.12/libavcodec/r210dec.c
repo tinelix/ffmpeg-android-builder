@@ -21,117 +21,124 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "config_components.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/bswap.h"
 #include "libavutil/common.h"
 
 static av_cold int decode_init(AVCodecContext *avctx)
 {
-    avctx->pix_fmt = AV_PIX_FMT_GBRP10;
+    avctx->pix_fmt             = AV_PIX_FMT_RGB48;
     avctx->bits_per_raw_sample = 10;
+
+    avctx->coded_frame         = avcodec_alloc_frame();
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
 
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                        AVPacket *avpkt)
 {
-    int h, w, ret;
+    int h, w;
+    AVFrame *pic = avctx->coded_frame;
     const uint32_t *src = (const uint32_t *)avpkt->data;
     int aligned_width = FFALIGN(avctx->width,
                                 avctx->codec_id == AV_CODEC_ID_R10K ? 1 : 64);
-    uint8_t *g_line, *b_line, *r_line;
-    int r10 = (avctx->codec_tag & 0xFFFFFF) == MKTAG('r', '1', '0', 0);
-    int le = avctx->codec_tag == MKTAG('R', '1', '0', 'k') &&
-             avctx->extradata_size >= 12 && !memcmp(&avctx->extradata[4], "DpxE", 4) &&
-             !avctx->extradata[11];
+    uint8_t *dst_line;
+
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
 
     if (avpkt->size < 4 * aligned_width * avctx->height) {
         av_log(avctx, AV_LOG_ERROR, "packet too small\n");
-        return AVERROR_INVALIDDATA;
+        return -1;
     }
 
-    if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
-        return ret;
+    pic->reference = 0;
+    if (ff_get_buffer(avctx, pic) < 0)
+        return -1;
 
     pic->pict_type = AV_PICTURE_TYPE_I;
-    pic->flags |= AV_FRAME_FLAG_KEY;
-    g_line = pic->data[0];
-    b_line = pic->data[1];
-    r_line = pic->data[2];
+    pic->key_frame = 1;
+    dst_line = pic->data[0];
 
     for (h = 0; h < avctx->height; h++) {
-        uint16_t *dstg = (uint16_t *)g_line;
-        uint16_t *dstb = (uint16_t *)b_line;
-        uint16_t *dstr = (uint16_t *)r_line;
+        uint16_t *dst = (uint16_t *)dst_line;
         for (w = 0; w < avctx->width; w++) {
             uint32_t pixel;
             uint16_t r, g, b;
-            if (avctx->codec_id == AV_CODEC_ID_AVRP || r10 || le) {
+            if (avctx->codec_id==AV_CODEC_ID_AVRP) {
                 pixel = av_le2ne32(*src++);
             } else {
                 pixel = av_be2ne32(*src++);
             }
-            if (avctx->codec_id == AV_CODEC_ID_R210) {
-                b =  pixel & 0x3ff;
-                g = (pixel >> 10) & 0x3ff;
-                r = (pixel >> 20) & 0x3ff;
-            } else if (r10) {
-                r =  pixel & 0x3ff;
-                g = (pixel >> 10) & 0x3ff;
-                b = (pixel >> 20) & 0x3ff;
+            if (avctx->codec_id==AV_CODEC_ID_R210) {
+                b =  pixel <<  6;
+                g = (pixel >>  4) & 0xffc0;
+                r = (pixel >> 14) & 0xffc0;
             } else {
-                b = (pixel >>  2) & 0x3ff;
-                g = (pixel >> 12) & 0x3ff;
-                r = (pixel >> 22) & 0x3ff;
+                b =  pixel <<  4;
+                g = (pixel >>  6) & 0xffc0;
+                r = (pixel >> 16) & 0xffc0;
             }
-            *dstr++ = r;
-            *dstg++ = g;
-            *dstb++ = b;
+            *dst++ = r | (r >> 10);
+            *dst++ = g | (g >> 10);
+            *dst++ = b | (b >> 10);
         }
         src += aligned_width - avctx->width;
-        g_line += pic->linesize[0];
-        b_line += pic->linesize[1];
-        r_line += pic->linesize[2];
+        dst_line += pic->linesize[0];
     }
 
     *got_frame      = 1;
+    *(AVFrame*)data = *avctx->coded_frame;
 
     return avpkt->size;
 }
 
+static av_cold int decode_close(AVCodecContext *avctx)
+{
+    AVFrame *pic = avctx->coded_frame;
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
 #if CONFIG_R210_DECODER
-const FFCodec ff_r210_decoder = {
-    .p.name         = "r210",
-    CODEC_LONG_NAME("Uncompressed RGB 10-bit"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_R210,
+AVCodec ff_r210_decoder = {
+    .name           = "r210",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_R210,
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .close          = decode_close,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Uncompressed RGB 10-bit"),
 };
 #endif
 #if CONFIG_R10K_DECODER
-const FFCodec ff_r10k_decoder = {
-    .p.name         = "r10k",
-    CODEC_LONG_NAME("AJA Kona 10-bit RGB Codec"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_R10K,
+AVCodec ff_r10k_decoder = {
+    .name           = "r10k",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_R10K,
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .close          = decode_close,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("AJA Kona 10-bit RGB Codec"),
 };
 #endif
 #if CONFIG_AVRP_DECODER
-const FFCodec ff_avrp_decoder = {
-    .p.name         = "avrp",
-    CODEC_LONG_NAME("Avid 1:1 10-bit RGB Packer"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AVRP,
+AVCodec ff_avrp_decoder = {
+    .name           = "avrp",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AVRP,
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .close          = decode_close,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name = NULL_IF_CONFIG_SMALL("Avid 1:1 10-bit RGB Packer"),
 };
 #endif

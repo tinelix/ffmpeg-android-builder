@@ -24,8 +24,6 @@
  * X-Face common data and utilities definition.
  */
 
-#include "libavutil/avassert.h"
-
 #include "xface.h"
 
 void ff_big_add(BigInt *b, uint8_t a)
@@ -45,7 +43,6 @@ void ff_big_add(BigInt *b, uint8_t a)
         c >>= XFACE_BITSPERWORD;
     }
     if (i == b->nb_words && c) {
-        av_assert0(b->nb_words < XFACE_MAX_WORDS);
         b->nb_words++;
         *w = c & XFACE_WORDMASK;
     }
@@ -101,7 +98,6 @@ void ff_big_mul(BigInt *b, uint8_t a)
         return;
     if (a == 0) {
         /* treat this as a == WORDCARRY and just shift everything left a WORD */
-        av_assert0(b->nb_words < XFACE_MAX_WORDS);
         i = b->nb_words++;
         w = b->words + i;
         while (i--) {
@@ -120,7 +116,6 @@ void ff_big_mul(BigInt *b, uint8_t a)
         c >>= XFACE_BITSPERWORD;
     }
     if (c) {
-        av_assert0(b->nb_words < XFACE_MAX_WORDS);
         b->nb_words++;
         *w = c & XFACE_WORDMASK;
     }
@@ -315,9 +310,9 @@ void ff_xface_generate_face(uint8_t *dst, uint8_t * const src)
 
             for (l = i - 2; l <= i + 2; l++) {
                 for (m = j - 2; m <= j; m++) {
-                    if (l <= 0 || l >= i && m == j)
+                    if (l >= i && m == j)
                         continue;
-                    if (l <= XFACE_WIDTH && m > 0)
+                    if (l > 0 && l <= XFACE_WIDTH && m > 0)
                         k = 2*k + src[l + m * XFACE_WIDTH];
                 }
             }

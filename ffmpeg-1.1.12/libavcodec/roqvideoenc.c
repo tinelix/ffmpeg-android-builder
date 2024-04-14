@@ -56,15 +56,10 @@
 
 #include <string.h>
 
-#include "libavutil/attributes.h"
-#include "libavutil/lfg.h"
-#include "libavutil/mem.h"
-#include "libavutil/opt.h"
 #include "roqvideo.h"
 #include "bytestream.h"
-#include "codec_internal.h"
 #include "elbg.h"
-#include "encode.h"
+#include "internal.h"
 #include "mathops.h"
 
 #define CHROMA_BIAS 1
@@ -73,92 +68,12 @@
  * Maximum number of generated 4x4 codebooks. Can't be 256 to workaround a
  * Quake 3 bug.
  */
-#define MAX_CBS_4x4 256
+#define MAX_CBS_4x4 255
 
 #define MAX_CBS_2x2 256 ///< Maximum number of 2x2 codebooks.
 
 /* The cast is useful when multiplying it by INT_MAX */
 #define ROQ_LAMBDA_SCALE ((uint64_t) FF_LAMBDA_SCALE)
-
-typedef struct RoqCodebooks {
-    int numCB4;
-    int numCB2;
-    int usedCB2[MAX_CBS_2x2];
-    int usedCB4[MAX_CBS_4x4];
-    uint8_t unpacked_cb2[MAX_CBS_2x2*2*2*3];
-    uint8_t unpacked_cb4[MAX_CBS_4x4*4*4*3];
-    uint8_t unpacked_cb4_enlarged[MAX_CBS_4x4*8*8*3];
-} RoqCodebooks;
-
-/**
- * Temporary vars
- */
-typedef struct RoqTempData
-{
-    int f2i4[MAX_CBS_4x4];
-    int i2f4[MAX_CBS_4x4];
-    int f2i2[MAX_CBS_2x2];
-    int i2f2[MAX_CBS_2x2];
-
-    int mainChunkSize;
-
-    int numCB4;
-    int numCB2;
-
-    RoqCodebooks codebooks;
-
-    int used_option[4];
-} RoqTempData;
-
-typedef struct SubcelEvaluation {
-    int eval_dist[4];
-    int best_bit_use;
-    int best_coding;
-
-    int subCels[4];
-    motion_vect motion;
-    int cbEntry;
-} SubcelEvaluation;
-
-typedef struct CelEvaluation {
-    int eval_dist[4];
-    int best_coding;
-
-    SubcelEvaluation subCels[4];
-
-    motion_vect motion;
-    int cbEntry;
-
-    int sourceX, sourceY;
-} CelEvaluation;
-
-typedef struct RoqEncContext {
-    RoqContext common;
-    struct ELBGContext *elbg;
-    AVLFG randctx;
-    uint64_t lambda;
-
-    motion_vect *this_motion4;
-    motion_vect *last_motion4;
-
-    motion_vect *this_motion8;
-    motion_vect *last_motion8;
-
-    unsigned int framesSinceKeyframe;
-
-    const AVFrame *frame_to_enc;
-    uint8_t *out_buf;
-    RoqTempData tmp_data;
-    roq_cell results4[4 * MAX_CBS_4x4];
-    int tmp_codebook_buf[FFMAX(24 * MAX_CBS_4x4, 6 * MAX_CBS_2x2)];
-
-    CelEvaluation *cel_evals;
-    int *closest_cb;
-    int *points;  // Allocated together with closest_cb
-
-    int first_frame;
-    int quake3_compat; // Quake 3 compatibility option
-} RoqEncContext;
 
 /* Macroblock support functions */
 static void unpack_roq_cell(roq_cell *cell, uint8_t u[4*3])
@@ -226,10 +141,9 @@ static int block_sse(uint8_t * const *buf1, uint8_t * const *buf2, int x1, int y
     return sse;
 }
 
-static int eval_motion_dist(RoqEncContext *enc, int x, int y, motion_vect vect,
+static int eval_motion_dist(RoqContext *enc, int x, int y, motion_vect vect,
                              int size)
 {
-    RoqContext *const roq = &enc->common;
     int mx=vect.d[0];
     int my=vect.d[1];
 
@@ -242,12 +156,12 @@ static int eval_motion_dist(RoqEncContext *enc, int x, int y, motion_vect vect,
     mx += x;
     my += y;
 
-    if ((unsigned) mx > roq->width-size || (unsigned) my > roq->height-size)
+    if ((unsigned) mx > enc->width-size || (unsigned) my > enc->height-size)
         return INT_MAX;
 
-    return block_sse(enc->frame_to_enc->data, roq->last_frame->data, x, y,
+    return block_sse(enc->frame_to_enc->data, enc->last_frame->data, x, y,
                      mx, my,
-                     enc->frame_to_enc->linesize, roq->last_frame->linesize,
+                     enc->frame_to_enc->linesize, enc->last_frame->linesize,
                      size);
 }
 
@@ -268,26 +182,80 @@ static inline int squared_diff_macroblock(uint8_t a[], uint8_t b[], int size)
     return sdiff;
 }
 
+typedef struct
+{
+    int eval_dist[4];
+    int best_bit_use;
+    int best_coding;
+
+    int subCels[4];
+    motion_vect motion;
+    int cbEntry;
+} SubcelEvaluation;
+
+typedef struct
+{
+    int eval_dist[4];
+    int best_coding;
+
+    SubcelEvaluation subCels[4];
+
+    motion_vect motion;
+    int cbEntry;
+
+    int sourceX, sourceY;
+} CelEvaluation;
+
+typedef struct
+{
+    int numCB4;
+    int numCB2;
+    int usedCB2[MAX_CBS_2x2];
+    int usedCB4[MAX_CBS_4x4];
+    uint8_t unpacked_cb2[MAX_CBS_2x2*2*2*3];
+    uint8_t unpacked_cb4[MAX_CBS_4x4*4*4*3];
+    uint8_t unpacked_cb4_enlarged[MAX_CBS_4x4*8*8*3];
+} RoqCodebooks;
+
+/**
+ * Temporary vars
+ */
+typedef struct RoqTempData
+{
+    CelEvaluation *cel_evals;
+
+    int f2i4[MAX_CBS_4x4];
+    int i2f4[MAX_CBS_4x4];
+    int f2i2[MAX_CBS_2x2];
+    int i2f2[MAX_CBS_2x2];
+
+    int mainChunkSize;
+
+    int numCB4;
+    int numCB2;
+
+    RoqCodebooks codebooks;
+
+    int *closest_cb2;
+    int used_option[4];
+} RoqTempdata;
+
 /**
  * Initialize cel evaluators and set their source coordinates
  */
-static int create_cel_evals(RoqEncContext *enc)
+static void create_cel_evals(RoqContext *enc, RoqTempdata *tempData)
 {
-    RoqContext *const roq = &enc->common;
+    int n=0, x, y, i;
 
-    enc->cel_evals = av_malloc_array(roq->width * roq->height / 64, sizeof(CelEvaluation));
-    if (!enc->cel_evals)
-        return AVERROR(ENOMEM);
+    tempData->cel_evals = av_malloc(enc->width*enc->height/64 * sizeof(CelEvaluation));
 
     /* Map to the ROQ quadtree order */
-    for (int y = 0, n = 0; y < roq->height; y += 16)
-        for (int x = 0; x < roq->width; x += 16)
-            for(int i = 0; i < 4; i++) {
-                enc->cel_evals[n  ].sourceX = x + (i&1)*8;
-                enc->cel_evals[n++].sourceY = y + (i&2)*4;
+    for (y=0; y<enc->height; y+=16)
+        for (x=0; x<enc->width; x+=16)
+            for(i=0; i<4; i++) {
+                tempData->cel_evals[n  ].sourceX = x + (i&1)*8;
+                tempData->cel_evals[n++].sourceY = y + (i&2)*4;
             }
-
-    return 0;
 }
 
 /**
@@ -336,7 +304,7 @@ static int index_mb(uint8_t cluster[], uint8_t cb[], int numCB,
         } \
     } while(0)
 
-static void motion_search(RoqEncContext *enc, int blocksize)
+static void motion_search(RoqContext *enc, int blocksize)
 {
     static const motion_vect offsets[8] = {
         {{ 0,-1}},
@@ -349,7 +317,6 @@ static void motion_search(RoqEncContext *enc, int blocksize)
         {{ 1, 1}},
     };
 
-    RoqContext *const roq = &enc->common;
     int diff, lowestdiff, oldbest;
     int off[3];
     motion_vect bestpick = {{0,0}};
@@ -358,7 +325,8 @@ static void motion_search(RoqEncContext *enc, int blocksize)
     motion_vect *last_motion;
     motion_vect *this_motion;
     motion_vect vect, vect2;
-    const int max = (roq->width / blocksize) * roq->height / blocksize;
+
+    int max=(enc->width/blocksize)*enc->height/blocksize;
 
     if (blocksize == 4) {
         last_motion = enc->last_motion4;
@@ -368,17 +336,17 @@ static void motion_search(RoqEncContext *enc, int blocksize)
         this_motion = enc->this_motion8;
     }
 
-    for (i = 0; i< roq->height; i += blocksize)
-        for (j = 0; j < roq->width; j += blocksize) {
+    for (i=0; i<enc->height; i+=blocksize)
+        for (j=0; j<enc->width; j+=blocksize) {
             lowestdiff = eval_motion_dist(enc, j, i, (motion_vect) {{0,0}},
                                           blocksize);
             bestpick.d[0] = 0;
             bestpick.d[1] = 0;
 
             if (blocksize == 4)
-                EVAL_MOTION(enc->this_motion8[(i/8) * (roq->width/8) + j/8]);
+                EVAL_MOTION(enc->this_motion8[(i/8)*(enc->width/8) + j/8]);
 
-            offset = (i/blocksize) * roq->width / blocksize + j / blocksize;
+            offset = (i/blocksize)*enc->width/blocksize + j/blocksize;
             if (offset < max && offset >= 0)
                 EVAL_MOTION(last_motion[offset]);
 
@@ -386,12 +354,12 @@ static void motion_search(RoqEncContext *enc, int blocksize)
             if (offset < max && offset >= 0)
                 EVAL_MOTION(last_motion[offset]);
 
-            offset = (i/blocksize + 1) * roq->width / blocksize + j / blocksize;
+            offset = (i/blocksize + 1)*enc->width/blocksize + j/blocksize;
             if (offset < max && offset >= 0)
                 EVAL_MOTION(last_motion[offset]);
 
-            off[0]= (i/blocksize) * roq->width / blocksize + j/blocksize - 1;
-            off[1]= off[0] - roq->width / blocksize + 1;
+            off[0]= (i/blocksize)*enc->width/blocksize + j/blocksize - 1;
+            off[1]= off[0] - enc->width/blocksize + 1;
             off[2]= off[1] + 1;
 
             if (i) {
@@ -420,7 +388,7 @@ static void motion_search(RoqEncContext *enc, int blocksize)
                 }
                 vect = bestpick;
             }
-            offset = (i/blocksize) * roq->width / blocksize + j/blocksize;
+            offset = (i/blocksize)*enc->width/blocksize + j/blocksize;
             this_motion[offset] = bestpick;
         }
 }
@@ -429,10 +397,8 @@ static void motion_search(RoqEncContext *enc, int blocksize)
  * Get distortion for all options available to a subcel
  */
 static void gather_data_for_subcel(SubcelEvaluation *subcel, int x,
-                                   int y, RoqEncContext *enc)
+                                   int y, RoqContext *enc, RoqTempdata *tempData)
 {
-    RoqContext *const roq = &enc->common;
-    RoqTempData *const tempData = &enc->tmp_data;
     uint8_t mb4[4*4*3];
     uint8_t mb2[2*2*3];
     int cluster_index;
@@ -441,25 +407,25 @@ static void gather_data_for_subcel(SubcelEvaluation *subcel, int x,
     static const int bitsUsed[4] = {2, 10, 10, 34};
 
     if (enc->framesSinceKeyframe >= 1) {
-        subcel->motion = enc->this_motion4[y * roq->width / 16 + x / 4];
+        subcel->motion = enc->this_motion4[y*enc->width/16 + x/4];
 
         subcel->eval_dist[RoQ_ID_FCC] =
             eval_motion_dist(enc, x, y,
-                             enc->this_motion4[y * roq->width / 16 + x / 4], 4);
+                             enc->this_motion4[y*enc->width/16 + x/4], 4);
     } else
         subcel->eval_dist[RoQ_ID_FCC] = INT_MAX;
 
     if (enc->framesSinceKeyframe >= 2)
         subcel->eval_dist[RoQ_ID_MOT] = block_sse(enc->frame_to_enc->data,
-                                                  roq->current_frame->data, x,
+                                                  enc->current_frame->data, x,
                                                   y, x, y,
                                                   enc->frame_to_enc->linesize,
-                                                  roq->current_frame->linesize,
+                                                  enc->current_frame->linesize,
                                                   4);
     else
         subcel->eval_dist[RoQ_ID_MOT] = INT_MAX;
 
-    cluster_index = y * roq->width / 16 + x / 4;
+    cluster_index = y*enc->width/16 + x/4;
 
     get_frame_mb(enc->frame_to_enc, x, y, mb4, 4);
 
@@ -471,7 +437,7 @@ static void gather_data_for_subcel(SubcelEvaluation *subcel, int x,
     subcel->eval_dist[RoQ_ID_CCC] = 0;
 
     for(i=0;i<4;i++) {
-        subcel->subCels[i] = enc->closest_cb[cluster_index*4+i];
+        subcel->subCels[i] = tempData->closest_cb2[cluster_index*4+i];
 
         get_frame_mb(enc->frame_to_enc, x+2*(i&1),
                      y+(i&2), mb2, 2);
@@ -494,12 +460,11 @@ static void gather_data_for_subcel(SubcelEvaluation *subcel, int x,
 /**
  * Get distortion for all options available to a cel
  */
-static void gather_data_for_cel(CelEvaluation *cel, RoqEncContext *enc)
+static void gather_data_for_cel(CelEvaluation *cel, RoqContext *enc,
+                                RoqTempdata *tempData)
 {
-    RoqContext *const roq = &enc->common;
-    RoqTempData *const tempData = &enc->tmp_data;
     uint8_t mb8[8*8*3];
-    int index = cel->sourceY * roq->width / 64 + cel->sourceX/8;
+    int index = cel->sourceY*enc->width/64 + cel->sourceX/8;
     int i, j, best_dist, divide_bit_use;
 
     int bitsUsed[4] = {2, 10, 10, 0};
@@ -515,11 +480,11 @@ static void gather_data_for_cel(CelEvaluation *cel, RoqEncContext *enc)
 
     if (enc->framesSinceKeyframe >= 2)
         cel->eval_dist[RoQ_ID_MOT] = block_sse(enc->frame_to_enc->data,
-                                               roq->current_frame->data,
+                                               enc->current_frame->data,
                                                cel->sourceX, cel->sourceY,
                                                cel->sourceX, cel->sourceY,
                                                enc->frame_to_enc->linesize,
-                                               roq->current_frame->linesize,8);
+                                               enc->current_frame->linesize,8);
     else
         cel->eval_dist[RoQ_ID_MOT] = INT_MAX;
 
@@ -529,10 +494,10 @@ static void gather_data_for_cel(CelEvaluation *cel, RoqEncContext *enc)
         index_mb(mb8, tempData->codebooks.unpacked_cb4_enlarged,
                  tempData->codebooks.numCB4, &cel->cbEntry, 8);
 
-    gather_data_for_subcel(cel->subCels + 0, cel->sourceX+0, cel->sourceY+0, enc);
-    gather_data_for_subcel(cel->subCels + 1, cel->sourceX+4, cel->sourceY+0, enc);
-    gather_data_for_subcel(cel->subCels + 2, cel->sourceX+0, cel->sourceY+4, enc);
-    gather_data_for_subcel(cel->subCels + 3, cel->sourceX+4, cel->sourceY+4, enc);
+    gather_data_for_subcel(cel->subCels + 0, cel->sourceX+0, cel->sourceY+0, enc, tempData);
+    gather_data_for_subcel(cel->subCels + 1, cel->sourceX+4, cel->sourceY+0, enc, tempData);
+    gather_data_for_subcel(cel->subCels + 2, cel->sourceX+0, cel->sourceY+4, enc, tempData);
+    gather_data_for_subcel(cel->subCels + 3, cel->sourceX+4, cel->sourceY+4, enc, tempData);
 
     cel->eval_dist[RoQ_ID_CCC] = 0;
     divide_bit_use = 0;
@@ -569,19 +534,17 @@ static void gather_data_for_cel(CelEvaluation *cel, RoqEncContext *enc)
         }
 }
 
-static void remap_codebooks(RoqEncContext *enc)
+static void remap_codebooks(RoqContext *enc, RoqTempdata *tempData)
 {
-    RoqContext *const roq = &enc->common;
-    RoqTempData *const tempData = &enc->tmp_data;
     int i, j, idx=0;
 
     /* Make remaps for the final codebook usage */
-    for (i=0; i<(enc->quake3_compat ? MAX_CBS_4x4-1 : MAX_CBS_4x4); i++) {
+    for (i=0; i<MAX_CBS_4x4; i++) {
         if (tempData->codebooks.usedCB4[i]) {
             tempData->i2f4[i] = idx;
             tempData->f2i4[idx] = i;
             for (j=0; j<4; j++)
-                tempData->codebooks.usedCB2[roq->cb4x4[i].idx[j]]++;
+                tempData->codebooks.usedCB2[enc->cb4x4[i].idx[j]]++;
             idx++;
         }
     }
@@ -603,10 +566,8 @@ static void remap_codebooks(RoqEncContext *enc)
 /**
  * Write codebook chunk
  */
-static void write_codebooks(RoqEncContext *enc)
+static void write_codebooks(RoqContext *enc, RoqTempdata *tempData)
 {
-    RoqContext *const roq = &enc->common;
-    RoqTempData *const tempData = &enc->tmp_data;
     int i, j;
     uint8_t **outp= &enc->out_buf;
 
@@ -617,14 +578,14 @@ static void write_codebooks(RoqEncContext *enc)
         bytestream_put_byte(outp, tempData->numCB2);
 
         for (i=0; i<tempData->numCB2; i++) {
-            bytestream_put_buffer(outp, roq->cb2x2[tempData->f2i2[i]].y, 4);
-            bytestream_put_byte(outp, roq->cb2x2[tempData->f2i2[i]].u);
-            bytestream_put_byte(outp, roq->cb2x2[tempData->f2i2[i]].v);
+            bytestream_put_buffer(outp, enc->cb2x2[tempData->f2i2[i]].y, 4);
+            bytestream_put_byte(outp, enc->cb2x2[tempData->f2i2[i]].u);
+            bytestream_put_byte(outp, enc->cb2x2[tempData->f2i2[i]].v);
         }
 
         for (i=0; i<tempData->numCB4; i++)
             for (j=0; j<4; j++)
-                bytestream_put_byte(outp, tempData->i2f2[roq->cb4x4[tempData->f2i4[i]].idx[j]]);
+                bytestream_put_byte(outp, tempData->i2f2[enc->cb4x4[tempData->f2i4[i]].idx[j]]);
 
     }
 }
@@ -636,7 +597,8 @@ static inline uint8_t motion_arg(motion_vect mot)
     return ((ax&15)<<4) | (ay&15);
 }
 
-typedef struct CodingSpool {
+typedef struct
+{
     int typeSpool;
     int typeSpoolLength;
     uint8_t argumentSpool[64];
@@ -659,14 +621,12 @@ static void write_typecode(CodingSpool *s, uint8_t type)
     }
 }
 
-static void reconstruct_and_encode_image(RoqEncContext *enc,
-                                         int w, int h, int numBlocks)
+static void reconstruct_and_encode_image(RoqContext *enc, RoqTempdata *tempData, int w, int h, int numBlocks)
 {
-    RoqContext *const roq = &enc->common;
-    RoqTempData *const tempData = &enc->tmp_data;
     int i, j, k;
     int x, y;
     int subX, subY;
+    int dist=0;
 
     roq_qcell *qcell;
     CelEvaluation *eval;
@@ -688,10 +648,11 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
     bytestream_put_byte(&enc->out_buf, 0x0);
 
     for (i=0; i<numBlocks; i++) {
-        eval = enc->cel_evals + i;
+        eval = tempData->cel_evals + i;
 
         x = eval->sourceX;
         y = eval->sourceY;
+        dist += eval->eval_dist[eval->best_coding];
 
         switch (eval->best_coding) {
         case RoQ_ID_MOT:
@@ -702,7 +663,7 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
             bytestream_put_byte(&spool.args, motion_arg(eval->motion));
 
             write_typecode(&spool, RoQ_ID_FCC);
-            ff_apply_motion_8x8(roq, x, y,
+            ff_apply_motion_8x8(enc, x, y,
                                 eval->motion.d[0], eval->motion.d[1]);
             break;
 
@@ -710,11 +671,11 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
             bytestream_put_byte(&spool.args, tempData->i2f4[eval->cbEntry]);
             write_typecode(&spool, RoQ_ID_SLD);
 
-            qcell = roq->cb4x4 + eval->cbEntry;
-            ff_apply_vector_4x4(roq, x  , y  , roq->cb2x2 + qcell->idx[0]);
-            ff_apply_vector_4x4(roq, x+4, y  , roq->cb2x2 + qcell->idx[1]);
-            ff_apply_vector_4x4(roq, x  , y+4, roq->cb2x2 + qcell->idx[2]);
-            ff_apply_vector_4x4(roq, x+4, y+4, roq->cb2x2 + qcell->idx[3]);
+            qcell = enc->cb4x4 + eval->cbEntry;
+            ff_apply_vector_4x4(enc, x  , y  , enc->cb2x2 + qcell->idx[0]);
+            ff_apply_vector_4x4(enc, x+4, y  , enc->cb2x2 + qcell->idx[1]);
+            ff_apply_vector_4x4(enc, x  , y+4, enc->cb2x2 + qcell->idx[2]);
+            ff_apply_vector_4x4(enc, x+4, y+4, enc->cb2x2 + qcell->idx[3]);
             break;
 
         case RoQ_ID_CCC:
@@ -732,7 +693,7 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
                     bytestream_put_byte(&spool.args,
                                         motion_arg(eval->subCels[j].motion));
 
-                    ff_apply_motion_4x4(roq, subX, subY,
+                    ff_apply_motion_4x4(enc, subX, subY,
                                         eval->subCels[j].motion.d[0],
                                         eval->subCels[j].motion.d[1]);
                     break;
@@ -741,16 +702,16 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
                     bytestream_put_byte(&spool.args,
                                         tempData->i2f4[eval->subCels[j].cbEntry]);
 
-                    qcell = roq->cb4x4 + eval->subCels[j].cbEntry;
+                    qcell = enc->cb4x4 + eval->subCels[j].cbEntry;
 
-                    ff_apply_vector_2x2(roq, subX  , subY  ,
-                                        roq->cb2x2 + qcell->idx[0]);
-                    ff_apply_vector_2x2(roq, subX+2, subY  ,
-                                        roq->cb2x2 + qcell->idx[1]);
-                    ff_apply_vector_2x2(roq, subX  , subY+2,
-                                        roq->cb2x2 + qcell->idx[2]);
-                    ff_apply_vector_2x2(roq, subX+2, subY+2,
-                                        roq->cb2x2 + qcell->idx[3]);
+                    ff_apply_vector_2x2(enc, subX  , subY  ,
+                                        enc->cb2x2 + qcell->idx[0]);
+                    ff_apply_vector_2x2(enc, subX+2, subY  ,
+                                        enc->cb2x2 + qcell->idx[1]);
+                    ff_apply_vector_2x2(enc, subX  , subY+2,
+                                        enc->cb2x2 + qcell->idx[2]);
+                    ff_apply_vector_2x2(enc, subX+2, subY+2,
+                                        enc->cb2x2 + qcell->idx[3]);
                     break;
 
                 case RoQ_ID_CCC:
@@ -759,8 +720,8 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
                         bytestream_put_byte(&spool.args,
                                             tempData->i2f2[cb_idx]);
 
-                        ff_apply_vector_2x2(roq, subX + 2*(k&1), subY + (k&2),
-                                            roq->cb2x2 + cb_idx);
+                        ff_apply_vector_2x2(enc, subX + 2*(k&1), subY + (k&2),
+                                            enc->cb2x2 + cb_idx);
                     }
                     break;
                 }
@@ -773,13 +734,28 @@ static void reconstruct_and_encode_image(RoqEncContext *enc,
     /* Flush the remainder of the argument/type spool */
     while (spool.typeSpoolLength)
         write_typecode(&spool, 0x0);
+
+#if 0
+    uint8_t *fdata[3] = {enc->frame_to_enc->data[0],
+                           enc->frame_to_enc->data[1],
+                           enc->frame_to_enc->data[2]};
+    uint8_t *cdata[3] = {enc->current_frame->data[0],
+                           enc->current_frame->data[1],
+                           enc->current_frame->data[2]};
+    av_log(enc->avctx, AV_LOG_ERROR, "Expected distortion: %i Actual: %i\n",
+           dist,
+           block_sse(fdata, cdata, 0, 0, 0, 0,
+                     enc->frame_to_enc->linesize,
+                     enc->current_frame->linesize,
+                     enc->width));  //WARNING: Square dimensions implied...
+#endif
 }
 
 
 /**
  * Create a single YUV cell from a 2x2 section of the image
  */
-static inline void frame_block_to_cell(int *block, uint8_t * const *data,
+static inline void frame_block_to_cell(uint8_t *block, uint8_t * const *data,
                                        int top, int left, const int *stride)
 {
     int i, j, u=0, v=0;
@@ -793,14 +769,14 @@ static inline void frame_block_to_cell(int *block, uint8_t * const *data,
             v       += data[2][x];
         }
 
-    *block++ = (u + 2) / 4 * CHROMA_BIAS;
-    *block++ = (v + 2) / 4 * CHROMA_BIAS;
+    *block++ = (u+2)/4;
+    *block++ = (v+2)/4;
 }
 
 /**
  * Create YUV clusters for the entire image
  */
-static void create_clusters(const AVFrame *frame, int w, int h, int *points)
+static void create_clusters(const AVFrame *frame, int w, int h, uint8_t *yuvClusters)
 {
     int i, j, k, l;
 
@@ -808,26 +784,32 @@ static void create_clusters(const AVFrame *frame, int w, int h, int *points)
         for (j=0; j<w; j+=4) {
             for (k=0; k < 2; k++)
                 for (l=0; l < 2; l++)
-                    frame_block_to_cell(points + (l + 2*k)*6, frame->data,
+                    frame_block_to_cell(yuvClusters + (l + 2*k)*6, frame->data,
                                         i+2*k, j+2*l, frame->linesize);
-            points += 24;
+            yuvClusters += 24;
         }
 }
 
-static int generate_codebook(RoqEncContext *enc,
-                             int *points, int inputCount, roq_cell *results,
-                             int size, int cbsize)
+static void generate_codebook(RoqContext *enc, RoqTempdata *tempdata,
+                              int *points, int inputCount, roq_cell *results,
+                              int size, int cbsize)
 {
-    int i, j, k, ret = 0;
+    int i, j, k;
     int c_size = size*size/4;
     int *buf;
-    int *codebook = enc->tmp_codebook_buf;
-    int *closest_cb = enc->closest_cb;
+    int *codebook = av_malloc(6*c_size*cbsize*sizeof(int));
+    int *closest_cb;
 
-    ret = avpriv_elbg_do(&enc->elbg, points, 6 * c_size, inputCount, codebook,
-                         cbsize, 1, closest_cb, &enc->randctx, 0);
-    if (ret < 0)
-        return ret;
+    if (size == 4)
+        closest_cb = av_malloc(6*c_size*inputCount*sizeof(int));
+    else
+        closest_cb = tempdata->closest_cb2;
+
+    ff_init_elbg(points, 6*c_size, inputCount, codebook, cbsize, 1, closest_cb, &enc->randctx);
+    ff_do_elbg(points, 6*c_size, inputCount, codebook, cbsize, 1, closest_cb, &enc->randctx);
+
+    if (size == 4)
+        av_free(closest_cb);
 
     buf = codebook;
     for (i=0; i<cbsize; i++)
@@ -839,66 +821,74 @@ static int generate_codebook(RoqEncContext *enc,
             results->v =    (*buf++ + CHROMA_BIAS/2)/CHROMA_BIAS;
             results++;
         }
-    return 0;
+
+    av_free(codebook);
 }
 
-static int generate_new_codebooks(RoqEncContext *enc)
+static void generate_new_codebooks(RoqContext *enc, RoqTempdata *tempData)
 {
-    int i, j, ret = 0;
-    RoqCodebooks *codebooks = &enc->tmp_data.codebooks;
-    RoqContext *const roq = &enc->common;
-    int max = roq->width * roq->height / 16;
+    int i,j;
+    RoqCodebooks *codebooks = &tempData->codebooks;
+    int max = enc->width*enc->height/16;
     uint8_t mb2[3*4];
-    int *points = enc->points;
+    roq_cell *results4 = av_malloc(sizeof(roq_cell)*MAX_CBS_4x4*4);
+    uint8_t *yuvClusters=av_malloc(sizeof(int)*max*6*4);
+    int *points = av_malloc(max*6*4*sizeof(int));
+    int bias;
 
     /* Subsample YUV data */
-    create_clusters(enc->frame_to_enc, roq->width, roq->height, points);
+    create_clusters(enc->frame_to_enc, enc->width, enc->height, yuvClusters);
 
-    codebooks->numCB4 = (enc->quake3_compat ? MAX_CBS_4x4-1 : MAX_CBS_4x4);
+    /* Cast to integer and apply chroma bias */
+    for (i=0; i<max*24; i++) {
+        bias = ((i%6)<4) ? 1 : CHROMA_BIAS;
+        points[i] = bias*yuvClusters[i];
+    }
 
     /* Create 4x4 codebooks */
-    if ((ret = generate_codebook(enc, points, max, enc->results4,
-                                 4, codebooks->numCB4)) < 0)
-        return ret;
+    generate_codebook(enc, tempData, points, max, results4, 4, MAX_CBS_4x4);
+
+    codebooks->numCB4 = MAX_CBS_4x4;
+
+    tempData->closest_cb2 = av_malloc(max*4*sizeof(int));
 
     /* Create 2x2 codebooks */
-    if ((ret = generate_codebook(enc, points, max * 4,
-                                 roq->cb2x2, 2, MAX_CBS_2x2)) < 0)
-        return ret;
+    generate_codebook(enc, tempData, points, max*4, enc->cb2x2, 2, MAX_CBS_2x2);
 
     codebooks->numCB2 = MAX_CBS_2x2;
 
     /* Unpack 2x2 codebook clusters */
     for (i=0; i<codebooks->numCB2; i++)
-        unpack_roq_cell(roq->cb2x2 + i, codebooks->unpacked_cb2 + i*2*2*3);
+        unpack_roq_cell(enc->cb2x2 + i, codebooks->unpacked_cb2 + i*2*2*3);
 
     /* Index all 4x4 entries to the 2x2 entries, unpack, and enlarge */
     for (i=0; i<codebooks->numCB4; i++) {
         for (j=0; j<4; j++) {
-            unpack_roq_cell(&enc->results4[4*i + j], mb2);
+            unpack_roq_cell(&results4[4*i + j], mb2);
             index_mb(mb2, codebooks->unpacked_cb2, codebooks->numCB2,
-                     &roq->cb4x4[i].idx[j], 2);
+                     &enc->cb4x4[i].idx[j], 2);
         }
-        unpack_roq_qcell(codebooks->unpacked_cb2, roq->cb4x4 + i,
+        unpack_roq_qcell(codebooks->unpacked_cb2, enc->cb4x4 + i,
                          codebooks->unpacked_cb4 + i*4*4*3);
         enlarge_roq_mb4(codebooks->unpacked_cb4 + i*4*4*3,
                         codebooks->unpacked_cb4_enlarged + i*8*8*3);
     }
 
-    return 0;
+    av_free(yuvClusters);
+    av_free(points);
+    av_free(results4);
 }
 
-static int roq_encode_video(RoqEncContext *enc)
+static void roq_encode_video(RoqContext *enc)
 {
-    RoqTempData *const tempData = &enc->tmp_data;
-    RoqContext *const roq = &enc->common;
-    int ret;
+    RoqTempdata *tempData = enc->tmpData;
+    int i;
 
     memset(tempData, 0, sizeof(*tempData));
 
-    ret = generate_new_codebooks(enc);
-    if (ret < 0)
-        return ret;
+    create_cel_evals(enc, tempData);
+
+    generate_new_codebooks(enc, tempData);
 
     if (enc->framesSinceKeyframe >= 1) {
         motion_search(enc, 8);
@@ -906,18 +896,14 @@ static int roq_encode_video(RoqEncContext *enc)
     }
 
  retry_encode:
-    for (int i = 0; i < roq->width * roq->height / 64; i++)
-        gather_data_for_cel(enc->cel_evals + i, enc);
+    for (i=0; i<enc->width*enc->height/64; i++)
+        gather_data_for_cel(tempData->cel_evals + i, enc, tempData);
 
     /* Quake 3 can't handle chunks bigger than 65535 bytes */
-    if (tempData->mainChunkSize/8 > 65535 && enc->quake3_compat) {
-        if (enc->lambda > 100000) {
-            av_log(roq->logctx, AV_LOG_ERROR, "Cannot encode video in Quake compatible form\n");
-            return AVERROR(EINVAL);
-        }
-        av_log(roq->logctx, AV_LOG_ERROR,
-               "Warning, generated a frame too big for Quake (%d > 65535), "
-               "now switching to a bigger qscale value.\n",
+    if (tempData->mainChunkSize/8 > 65535) {
+        av_log(enc->avctx, AV_LOG_ERROR,
+               "Warning, generated a frame too big (%d > 65535), "
+               "try using a smaller qscale value.\n",
                tempData->mainChunkSize/8);
         enc->lambda *= 1.5;
         tempData->mainChunkSize = 0;
@@ -930,103 +916,68 @@ static int roq_encode_video(RoqEncContext *enc)
         goto retry_encode;
     }
 
-    remap_codebooks(enc);
+    remap_codebooks(enc, tempData);
 
-    write_codebooks(enc);
+    write_codebooks(enc, tempData);
 
-    reconstruct_and_encode_image(enc, roq->width, roq->height,
-                                 roq->width * roq->height / 64);
+    reconstruct_and_encode_image(enc, tempData, enc->width, enc->height,
+                                 enc->width*enc->height/64);
+
+    enc->avctx->coded_frame = enc->current_frame;
 
     /* Rotate frame history */
-    FFSWAP(AVFrame *,    roq->current_frame,   roq->last_frame);
+    FFSWAP(AVFrame *, enc->current_frame, enc->last_frame);
     FFSWAP(motion_vect *, enc->last_motion4, enc->this_motion4);
     FFSWAP(motion_vect *, enc->last_motion8, enc->this_motion8);
 
+    av_free(tempData->cel_evals);
+    av_free(tempData->closest_cb2);
+
     enc->framesSinceKeyframe++;
-
-    return 0;
 }
 
-static av_cold int roq_encode_end(AVCodecContext *avctx)
+static int roq_encode_init(AVCodecContext *avctx)
 {
-    RoqEncContext *const enc = avctx->priv_data;
-
-    av_frame_free(&enc->common.current_frame);
-    av_frame_free(&enc->common.last_frame);
-
-    av_freep(&enc->cel_evals);
-    av_freep(&enc->closest_cb);
-    av_freep(&enc->this_motion4);
-    av_freep(&enc->last_motion4);
-    av_freep(&enc->this_motion8);
-    av_freep(&enc->last_motion8);
-
-    avpriv_elbg_free(&enc->elbg);
-
-    return 0;
-}
-
-static av_cold int roq_encode_init(AVCodecContext *avctx)
-{
-    RoqEncContext *const enc = avctx->priv_data;
-    RoqContext    *const roq = &enc->common;
+    RoqContext *enc = avctx->priv_data;
 
     av_lfg_init(&enc->randctx, 1);
-
-    roq->logctx = avctx;
 
     enc->framesSinceKeyframe = 0;
     if ((avctx->width & 0xf) || (avctx->height & 0xf)) {
         av_log(avctx, AV_LOG_ERROR, "Dimensions must be divisible by 16\n");
-        return AVERROR(EINVAL);
-    }
-
-    if (avctx->width > 65535 || avctx->height > 65535) {
-        av_log(avctx, AV_LOG_ERROR, "Dimensions are max %d\n", enc->quake3_compat ? 32768 : 65535);
-        return AVERROR(EINVAL);
+        return -1;
     }
 
     if (((avctx->width)&(avctx->width-1))||((avctx->height)&(avctx->height-1)))
-        av_log(avctx, AV_LOG_ERROR, "Warning: dimensions not power of two, this is not supported by quake\n");
+        av_log(avctx, AV_LOG_ERROR, "Warning: dimensions not power of two\n");
 
-    roq->width  = avctx->width;
-    roq->height = avctx->height;
+    enc->width = avctx->width;
+    enc->height = avctx->height;
 
     enc->framesSinceKeyframe = 0;
     enc->first_frame = 1;
 
-    roq->last_frame    = av_frame_alloc();
-    roq->current_frame = av_frame_alloc();
-    if (!roq->last_frame || !roq->current_frame)
-        return AVERROR(ENOMEM);
+    enc->last_frame    = &enc->frames[0];
+    enc->current_frame = &enc->frames[1];
+
+    enc->tmpData      = av_malloc(sizeof(RoqTempdata));
 
     enc->this_motion4 =
-        av_calloc(roq->width * roq->height / 16, sizeof(*enc->this_motion4));
+        av_mallocz((enc->width*enc->height/16)*sizeof(motion_vect));
 
     enc->last_motion4 =
-        av_malloc_array (roq->width * roq->height / 16, sizeof(motion_vect));
+        av_malloc ((enc->width*enc->height/16)*sizeof(motion_vect));
 
     enc->this_motion8 =
-        av_calloc(roq->width * roq->height / 64, sizeof(*enc->this_motion8));
+        av_mallocz((enc->width*enc->height/64)*sizeof(motion_vect));
 
     enc->last_motion8 =
-        av_malloc_array (roq->width * roq->height / 64, sizeof(motion_vect));
+        av_malloc ((enc->width*enc->height/64)*sizeof(motion_vect));
 
-    /* 4x4 codebook needs 6 * 4 * 4 / 4 * width * height / 16 * sizeof(int);
-     * and so does the points buffer. */
-    enc->closest_cb   =
-        av_malloc_array(roq->width * roq->height, 3 * sizeof(int));
-
-    if (!enc->this_motion4 || !enc->last_motion4 ||
-        !enc->this_motion8 || !enc->last_motion8 || !enc->closest_cb)
-        return AVERROR(ENOMEM);
-
-    enc->points = enc->closest_cb + roq->width * roq->height * 3 / 2;
-
-    return create_cel_evals(enc);
+    return 0;
 }
 
-static void roq_write_video_info_chunk(RoqEncContext *enc)
+static void roq_write_video_info_chunk(RoqContext *enc)
 {
     /* ROQ info chunk */
     bytestream_put_le16(&enc->out_buf, RoQ_INFO);
@@ -1039,10 +990,10 @@ static void roq_write_video_info_chunk(RoqEncContext *enc)
     bytestream_put_byte(&enc->out_buf, 0x00);
 
     /* Width */
-    bytestream_put_le16(&enc->out_buf, enc->common.width);
+    bytestream_put_le16(&enc->out_buf, enc->width);
 
     /* Height */
-    bytestream_put_le16(&enc->out_buf, enc->common.height);
+    bytestream_put_le16(&enc->out_buf, enc->height);
 
     /* Unused in Quake 3, mimics the output of the real encoder */
     bytestream_put_byte(&enc->out_buf, 0x08);
@@ -1054,9 +1005,10 @@ static void roq_write_video_info_chunk(RoqEncContext *enc)
 static int roq_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                             const AVFrame *frame, int *got_packet)
 {
-    RoqEncContext *const enc = avctx->priv_data;
-    RoqContext    *const roq = &enc->common;
+    RoqContext *enc = avctx->priv_data;
     int size, ret;
+
+    enc->avctx = avctx;
 
     enc->frame_to_enc = frame;
 
@@ -1067,21 +1019,23 @@ static int roq_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 
     /* 138 bits max per 8x8 block +
      *     256 codebooks*(6 bytes 2x2 + 4 bytes 4x4) + 8 bytes frame header */
-    size = ((roq->width * roq->height / 64) * 138 + 7) / 8 + 256 * (6 + 4) + 8;
-    if ((ret = ff_alloc_packet(avctx, pkt, size)) < 0)
+    size = ((enc->width * enc->height / 64) * 138 + 7) / 8 + 256 * (6 + 4) + 8;
+    if ((ret = ff_alloc_packet2(avctx, pkt, size)) < 0)
         return ret;
     enc->out_buf = pkt->data;
 
-    /* Check for I-frame */
+    /* Check for I frame */
     if (enc->framesSinceKeyframe == avctx->gop_size)
         enc->framesSinceKeyframe = 0;
 
     if (enc->first_frame) {
         /* Alloc memory for the reconstruction data (we must know the stride
          for that) */
-        if ((ret = ff_encode_alloc_frame(avctx, roq->current_frame)) < 0 ||
-            (ret = ff_encode_alloc_frame(avctx, roq->last_frame   )) < 0)
-            return ret;
+        if (ff_get_buffer(avctx, enc->current_frame) ||
+            ff_get_buffer(avctx, enc->last_frame)) {
+            av_log(avctx, AV_LOG_ERROR, "  RoQ: get_buffer() failed\n");
+            return -1;
+        }
 
         /* Before the first video frame, write a "video info" chunk */
         roq_write_video_info_chunk(enc);
@@ -1090,9 +1044,7 @@ static int roq_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     }
 
     /* Encode the actual frame */
-    ret = roq_encode_video(enc);
-    if (ret < 0)
-        return ret;
+    roq_encode_video(enc);
 
     pkt->size   = enc->out_buf - pkt->data;
     if (enc->framesSinceKeyframe == 1)
@@ -1102,32 +1054,32 @@ static int roq_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     return 0;
 }
 
-#define OFFSET(x) offsetof(RoqEncContext, x)
-#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
-static const AVOption options[] = {
-    { "quake3_compat", "Whether to respect known limitations in Quake 3 decoder", OFFSET(quake3_compat), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VE },
-    { NULL },
-};
+static int roq_encode_end(AVCodecContext *avctx)
+{
+    RoqContext *enc = avctx->priv_data;
 
-static const AVClass roq_class = {
-    .class_name = "RoQ",
-    .item_name  = av_default_item_name,
-    .option     = options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
+    avctx->release_buffer(avctx, enc->last_frame);
+    avctx->release_buffer(avctx, enc->current_frame);
 
-const FFCodec ff_roq_encoder = {
-    .p.name               = "roqvideo",
-    CODEC_LONG_NAME("id RoQ video"),
-    .p.type               = AVMEDIA_TYPE_VIDEO,
-    .p.id                 = AV_CODEC_ID_ROQ,
-    .p.capabilities       = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
-    .priv_data_size       = sizeof(RoqEncContext),
+    av_free(enc->tmpData);
+    av_free(enc->this_motion4);
+    av_free(enc->last_motion4);
+    av_free(enc->this_motion8);
+    av_free(enc->last_motion8);
+
+    return 0;
+}
+
+AVCodec ff_roq_encoder = {
+    .name                 = "roqvideo",
+    .type                 = AVMEDIA_TYPE_VIDEO,
+    .id                   = AV_CODEC_ID_ROQ,
+    .priv_data_size       = sizeof(RoqContext),
     .init                 = roq_encode_init,
-    FF_CODEC_ENCODE_CB(roq_encode_frame),
+    .encode2              = roq_encode_frame,
     .close                = roq_encode_end,
-    .p.pix_fmts           = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUVJ444P,
+    .supported_framerates = (const AVRational[]){ {30,1}, {0,0} },
+    .pix_fmts             = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV444P,
                                                         AV_PIX_FMT_NONE },
-    .p.priv_class   = &roq_class,
-    .caps_internal        = FF_CODEC_CAP_INIT_CLEANUP,
+    .long_name            = NULL_IF_CONFIG_SMALL("id RoQ video"),
 };

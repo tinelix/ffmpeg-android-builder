@@ -18,62 +18,52 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#include "libavutil/opt.h"
 #include "avformat.h"
-#include "mux.h"
 
 /* Multipart JPEG */
 
-#define BOUNDARY_TAG "ffmpeg"
-
-typedef struct MPJPEGContext {
-    AVClass *class;
-    char *boundary_tag;
-} MPJPEGContext;
+#define BOUNDARY_TAG "ffserver"
 
 static int mpjpeg_write_header(AVFormatContext *s)
 {
-    MPJPEGContext *mpj = s->priv_data;
-    avio_printf(s->pb, "--%s\r\n", mpj->boundary_tag);
+    uint8_t buf1[256];
+
+    snprintf(buf1, sizeof(buf1), "--%s\r\n", BOUNDARY_TAG);
+    avio_write(s->pb, buf1, strlen(buf1));
+    avio_flush(s->pb);
     return 0;
 }
 
 static int mpjpeg_write_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    MPJPEGContext *mpj = s->priv_data;
-    avio_printf(s->pb, "Content-type: image/jpeg\r\n");
-    avio_printf(s->pb, "Content-length: %d\r\n\r\n",
-                pkt->size);
+    uint8_t buf1[256];
+
+    snprintf(buf1, sizeof(buf1), "Content-type: image/jpeg\r\n");
+    avio_write(s->pb, buf1, strlen(buf1));
+
+    snprintf(buf1, sizeof(buf1), "Content-length: %d\r\n\r\n", pkt->size);
+    avio_write(s->pb, buf1, strlen(buf1));
     avio_write(s->pb, pkt->data, pkt->size);
 
-    avio_printf(s->pb, "\r\n--%s\r\n", mpj->boundary_tag);
+    snprintf(buf1, sizeof(buf1), "\r\n--%s\r\n", BOUNDARY_TAG);
+    avio_write(s->pb, buf1, strlen(buf1));
+    avio_flush(s->pb);
     return 0;
 }
 
-static const AVOption options[] = {
-    { "boundary_tag",    "Boundary tag", offsetof(MPJPEGContext, boundary_tag),   AV_OPT_TYPE_STRING, {.str = BOUNDARY_TAG}, .flags = AV_OPT_FLAG_ENCODING_PARAM },
-    { NULL },
-};
+static int mpjpeg_write_trailer(AVFormatContext *s)
+{
+    return 0;
+}
 
-static const AVClass mpjpeg_muxer_class = {
-    .class_name = "mpjpeg_muxer",
-    .item_name  = av_default_item_name,
-    .option     = options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
-
-const FFOutputFormat ff_mpjpeg_muxer = {
-    .p.name            = "mpjpeg",
-    .p.long_name       = NULL_IF_CONFIG_SMALL("MIME multipart JPEG"),
-    .p.mime_type       = "multipart/x-mixed-replace;boundary=" BOUNDARY_TAG,
-    .p.extensions      = "mjpg",
-    .priv_data_size    = sizeof(MPJPEGContext),
-    .p.audio_codec     = AV_CODEC_ID_NONE,
-    .p.video_codec     = AV_CODEC_ID_MJPEG,
-    .p.subtitle_codec  = AV_CODEC_ID_NONE,
-    .flags_internal    = FF_OFMT_FLAG_ONLY_DEFAULT_CODECS,
+AVOutputFormat ff_mpjpeg_muxer = {
+    .name              = "mpjpeg",
+    .long_name         = NULL_IF_CONFIG_SMALL("MIME multipart JPEG"),
+    .mime_type         = "multipart/x-mixed-replace;boundary=" BOUNDARY_TAG,
+    .extensions        = "mjpg",
+    .audio_codec       = AV_CODEC_ID_NONE,
+    .video_codec       = AV_CODEC_ID_MJPEG,
     .write_header      = mpjpeg_write_header,
     .write_packet      = mpjpeg_write_packet,
-    .p.flags           = AVFMT_NOTIMESTAMPS,
-    .p.priv_class      = &mpjpeg_muxer_class,
+    .write_trailer     = mpjpeg_write_trailer,
 };

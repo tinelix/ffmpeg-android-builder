@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#! /usr/bin/perl
 
 #   Copyright (C) 1999, 2000, 2001 Free Software Foundation, Inc.
 
@@ -166,13 +166,10 @@ INF: while(<$inf>) {
         if ($ended =~ /^(?:ifset|ifclear|ignore|menu|iftex|ifhtml|ifnothtml)$/) {
             $skipping = pop @skstack;
             next;
-        } elsif ($ended =~ /^(?:example|smallexample|verbatim|display)$/) {
+        } elsif ($ended =~ /^(?:example|smallexample|display)$/) {
             $shift = "";
             $_ = "";        # need a paragraph break
         } elsif ($ended =~ /^(?:itemize|enumerate|(?:multi|[fv])?table)$/) {
-            $_ = "\n=back\n";
-            $ic = pop @icstack;
-        } elsif ($ended =~ /^float$/) {
             $_ = "\n=back\n";
             $ic = pop @icstack;
         } else {
@@ -285,25 +282,11 @@ INF: while(<$inf>) {
         $_ = "\n=over 4\n";
     };
 
-    /^\@(multitable)\s+{.*/ and do {
-        push @endwstack, $endw;
-        push @icstack, $ic;
-        $endw = $1;
-        $ic = "";
-        $_ = "\n=over 4\n";
-    };
-
-    /^\@((?:small)?example|verbatim|display)/ and do {
+    /^\@((?:small)?example|display)/ and do {
         push @endwstack, $endw;
         $endw = $1;
         $shift = "\t";
         $_ = "";        # need a paragraph break
-    };
-
-    /^\@(float)\s+\w+/ and do {
-        push @endwstack, $endw;
-        $endw = $1;
-        $_ = "\n=over 4\n";
     };
 
     /^\@item\s+(.*\S)\s*$/ and $endw eq "multitable" and do {
@@ -315,10 +298,10 @@ INF: while(<$inf>) {
 
     /^\@tab\s+(.*\S)\s*$/ and $endw eq "multitable" and do {
         my $columns = $1;
-        $columns =~ s/\@tab//;
+        $columns =~ s/\@tab/ : /;
 
-        $_ = $columns;
-        $chapter =~ s/$//;
+        $_ = " : ". $columns;
+        $chapter =~ s/\n+\s+$//;
     };
 
     /^\@itemx?\s*(.+)?$/ and do {
@@ -340,9 +323,6 @@ $inf = pop @instack;
 }
 
 die "No filename or title\n" unless defined $fn && defined $tl;
-
-# always use utf8
-print "=encoding utf8\n\n";
 
 $chapters{NAME} = "$fn \- $tl\n";
 $chapters{FOOTNOTES} .= "=back\n" if exists $chapters{FOOTNOTES};
@@ -393,12 +373,12 @@ sub postprocess
     # @* is also impossible in .pod; we discard it and any newline that
     # follows it.  Similarly, our macro @gol must be discarded.
 
-    s/\@anchor\{(?:[^\}]*)\}//g;
+    s/\@anchor{(?:[^\}]*)\}//g;
     s/\(?\@xref\{(?:[^\}]*)\}(?:[^.<]|(?:<[^<>]*>))*\.\)?//g;
     s/\s+\(\@pxref\{(?:[^\}]*)\}\)//g;
     s/;\s+\@pxref\{(?:[^\}]*)\}//g;
-    s/\@ref\{(?:[^,\}]*,)(?:[^,\}]*,)([^,\}]*).*\}/B<$1>/g;
-    s/\@ref\{([^\}]*)\}/B<$1>/g;
+    s/\@ref\{(?:[^,\}]*,)(?:[^,\}]*,)([^,\}]*).*\}/$1/g;
+    s/\@ref\{([^\}]*)\}/$1/g;
     s/\@noindent\s*//g;
     s/\@refill//g;
     s/\@gol//g;

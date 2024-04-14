@@ -34,7 +34,6 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define MM_PREAMBLE_SIZE    6
@@ -55,11 +54,11 @@
 #define MM_PALETTE_COUNT    128
 #define MM_PALETTE_SIZE     (MM_PALETTE_COUNT*3)
 
-typedef struct MmDemuxContext {
+typedef struct {
   unsigned int audio_pts, video_pts;
 } MmDemuxContext;
 
-static int probe(const AVProbeData *p)
+static int probe(AVProbeData *p)
 {
     int len, type, fps, w, h;
     if (p->buf_size < MM_HEADER_LEN_AV + MM_PREAMBLE_SIZE)
@@ -80,7 +79,7 @@ static int probe(const AVProbeData *p)
         return 0;
 
     /* only return half certainty since this check is a bit sketchy */
-    return AVPROBE_SCORE_EXTENSION;
+    return AVPROBE_SCORE_MAX / 2;
 }
 
 static int read_header(AVFormatContext *s)
@@ -110,11 +109,11 @@ static int read_header(AVFormatContext *s)
     st = avformat_new_stream(s, NULL);
     if (!st)
         return AVERROR(ENOMEM);
-    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-    st->codecpar->codec_id = AV_CODEC_ID_MMVIDEO;
-    st->codecpar->codec_tag = 0;  /* no fourcc */
-    st->codecpar->width = width;
-    st->codecpar->height = height;
+    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codec->codec_id = AV_CODEC_ID_MMVIDEO;
+    st->codec->codec_tag = 0;  /* no fourcc */
+    st->codec->width = width;
+    st->codec->height = height;
     avpriv_set_pts_info(st, 64, 1, frame_rate);
 
     /* audio stream */
@@ -122,11 +121,12 @@ static int read_header(AVFormatContext *s)
         st = avformat_new_stream(s, NULL);
         if (!st)
             return AVERROR(ENOMEM);
-        st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-        st->codecpar->codec_tag = 0; /* no fourcc */
-        st->codecpar->codec_id = AV_CODEC_ID_PCM_U8;
-        st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
-        st->codecpar->sample_rate = 8000;
+        st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+        st->codec->codec_tag = 0; /* no fourcc */
+        st->codec->codec_id = AV_CODEC_ID_PCM_U8;
+        st->codec->channels = 1;
+        st->codec->channel_layout = AV_CH_LAYOUT_MONO;
+        st->codec->sample_rate = 8000;
         avpriv_set_pts_info(st, 64, 1, 8000); /* 8000 hz */
     }
 
@@ -142,7 +142,6 @@ static int read_packet(AVFormatContext *s,
     AVIOContext *pb = s->pb;
     unsigned char preamble[MM_PREAMBLE_SIZE];
     unsigned int type, length;
-    int ret;
 
     while(1) {
 
@@ -162,8 +161,8 @@ static int read_packet(AVFormatContext *s,
         case MM_TYPE_INTRA_HHV :
         case MM_TYPE_INTER_HHV :
             /* output preamble + data */
-            if ((ret = av_new_packet(pkt, length + MM_PREAMBLE_SIZE)) < 0)
-                return ret;
+            if (av_new_packet(pkt, length + MM_PREAMBLE_SIZE))
+                return AVERROR(ENOMEM);
             memcpy(pkt->data, preamble, MM_PREAMBLE_SIZE);
             if (avio_read(pb, pkt->data + MM_PREAMBLE_SIZE, length) != length)
                 return AVERROR(EIO);
@@ -175,10 +174,8 @@ static int read_packet(AVFormatContext *s,
             return 0;
 
         case MM_TYPE_AUDIO :
-            if (s->nb_streams < 2)
-                return AVERROR_INVALIDDATA;
-            if ((ret = av_get_packet(s->pb, pkt, length)) < 0)
-                return ret;
+            if (av_get_packet(s->pb, pkt, length)<0)
+                return AVERROR(ENOMEM);
             pkt->stream_index = 1;
             pkt->pts = mm->audio_pts++;
             return 0;
@@ -190,9 +187,9 @@ static int read_packet(AVFormatContext *s,
     }
 }
 
-const FFInputFormat ff_mm_demuxer = {
-    .p.name         = "mm",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("American Laser Games MM"),
+AVInputFormat ff_mm_demuxer = {
+    .name           = "mm",
+    .long_name      = NULL_IF_CONFIG_SMALL("American Laser Games MM"),
     .priv_data_size = sizeof(MmDemuxContext),
     .read_probe     = probe,
     .read_header    = read_header,

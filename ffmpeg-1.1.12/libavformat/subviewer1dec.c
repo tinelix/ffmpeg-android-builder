@@ -24,7 +24,6 @@
  */
 
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "subtitles.h"
 
@@ -32,12 +31,12 @@ typedef struct {
     FFDemuxSubtitlesQueue q;
 } SubViewer1Context;
 
-static int subviewer1_probe(const AVProbeData *p)
+static int subviewer1_probe(AVProbeData *p)
 {
     const unsigned char *ptr = p->buf;
 
     if (strstr(ptr, "******** START SCRIPT ********"))
-        return AVPROBE_SCORE_EXTENSION;
+        return AVPROBE_SCORE_MAX / 2;
     return 0;
 }
 
@@ -51,10 +50,10 @@ static int subviewer1_read_header(AVFormatContext *s)
     if (!st)
         return AVERROR(ENOMEM);
     avpriv_set_pts_info(st, 64, 1, 1);
-    st->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
-    st->codecpar->codec_id   = AV_CODEC_ID_SUBVIEWER1;
+    st->codec->codec_type = AVMEDIA_TYPE_SUBTITLE;
+    st->codec->codec_id   = AV_CODEC_ID_SUBVIEWER1;
 
-    while (!avio_feof(s->pb)) {
+    while (!url_feof(s->pb)) {
         char line[4096];
         int len = ff_get_line(s->pb, line, sizeof(line));
         int hh, mm, ss;
@@ -87,19 +86,39 @@ static int subviewer1_read_header(AVFormatContext *s)
         }
     }
 
-    ff_subtitles_queue_finalize(s, &subviewer1->q);
+    ff_subtitles_queue_finalize(&subviewer1->q);
     return 0;
 }
 
-const FFInputFormat ff_subviewer1_demuxer = {
-    .p.name         = "subviewer1",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("SubViewer v1 subtitle format"),
-    .p.extensions   = "sub",
+static int subviewer1_read_packet(AVFormatContext *s, AVPacket *pkt)
+{
+    SubViewer1Context *subviewer1 = s->priv_data;
+    return ff_subtitles_queue_read_packet(&subviewer1->q, pkt);
+}
+
+static int subviewer1_read_seek(AVFormatContext *s, int stream_index,
+                               int64_t min_ts, int64_t ts, int64_t max_ts, int flags)
+{
+    SubViewer1Context *subviewer1 = s->priv_data;
+    return ff_subtitles_queue_seek(&subviewer1->q, s, stream_index,
+                                   min_ts, ts, max_ts, flags);
+}
+
+static int subviewer1_read_close(AVFormatContext *s)
+{
+    SubViewer1Context *subviewer1 = s->priv_data;
+    ff_subtitles_queue_clean(&subviewer1->q);
+    return 0;
+}
+
+AVInputFormat ff_subviewer1_demuxer = {
+    .name           = "subviewer1",
+    .long_name      = NULL_IF_CONFIG_SMALL("SubViewer v1 subtitle format"),
     .priv_data_size = sizeof(SubViewer1Context),
-    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = subviewer1_probe,
     .read_header    = subviewer1_read_header,
-    .read_packet    = ff_subtitles_read_packet,
-    .read_seek2     = ff_subtitles_read_seek,
-    .read_close     = ff_subtitles_read_close,
+    .read_packet    = subviewer1_read_packet,
+    .read_seek2     = subviewer1_read_seek,
+    .read_close     = subviewer1_read_close,
+    .extensions     = "sub",
 };

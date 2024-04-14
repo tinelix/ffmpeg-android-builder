@@ -31,30 +31,19 @@
 #    define INTER double
 #    define RENAME(x) x ## _double
 #elif defined(TEMPLATE_REMATRIX_S16)
+#    define R(x) (((x) + 16384)>>15)
 #    define SAMPLE int16_t
 #    define COEFF int
 #    define INTER int
-#  ifdef TEMPLATE_CLIP
-#    define R(x) av_clip_int16(((x) + 16384)>>15)
-#    define RENAME(x) x ## _clip_s16
-#  else
-#    define R(x) (((x) + 16384)>>15)
 #    define RENAME(x) x ## _s16
-#  endif
-#elif defined(TEMPLATE_REMATRIX_S32)
-#    define R(x) (((x) + 16384)>>15)
-#    define SAMPLE int32_t
-#    define COEFF int
-#    define INTER int64_t
-#    define RENAME(x) x ## _s32
 #endif
 
 typedef void (RENAME(mix_any_func_type))(SAMPLE **out, const SAMPLE **in1, COEFF *coeffp, integer len);
 
 static void RENAME(sum2)(SAMPLE *out, const SAMPLE *in1, const SAMPLE *in2, COEFF *coeffp, integer index1, integer index2, integer len){
     int i;
-    INTER coeff1 = coeffp[index1];
-    INTER coeff2 = coeffp[index2];
+    COEFF coeff1 = coeffp[index1];
+    COEFF coeff2 = coeffp[index2];
 
     for(i=0; i<len; i++)
         out[i] = R(coeff1*in1[i] + coeff2*in2[i]);
@@ -62,7 +51,7 @@ static void RENAME(sum2)(SAMPLE *out, const SAMPLE *in1, const SAMPLE *in2, COEF
 
 static void RENAME(copy)(SAMPLE *out, const SAMPLE *in, COEFF *coeffp, integer index, integer len){
     int i;
-    INTER coeff = coeffp[index];
+    COEFF coeff = coeffp[index];
     for(i=0; i<len; i++)
         out[i] = R(coeff*in[i]);
 }
@@ -71,9 +60,9 @@ static void RENAME(mix6to2)(SAMPLE **out, const SAMPLE **in, COEFF *coeffp, inte
     int i;
 
     for(i=0; i<len; i++) {
-        INTER t = in[2][i]*(INTER)coeffp[0*6+2] + in[3][i]*(INTER)coeffp[0*6+3];
-        out[0][i] = R(t + in[0][i]*(INTER)coeffp[0*6+0] + in[4][i]*(INTER)coeffp[0*6+4]);
-        out[1][i] = R(t + in[1][i]*(INTER)coeffp[1*6+1] + in[5][i]*(INTER)coeffp[1*6+5]);
+        INTER t = in[2][i]*coeffp[0*6+2] + in[3][i]*coeffp[0*6+3];
+        out[0][i] = R(t + in[0][i]*coeffp[0*6+0] + in[4][i]*coeffp[0*6+4]);
+        out[1][i] = R(t + in[1][i]*coeffp[1*6+1] + in[5][i]*coeffp[1*6+5]);
     }
 }
 
@@ -81,23 +70,20 @@ static void RENAME(mix8to2)(SAMPLE **out, const SAMPLE **in, COEFF *coeffp, inte
     int i;
 
     for(i=0; i<len; i++) {
-        INTER t = in[2][i]*(INTER)coeffp[0*8+2] + in[3][i]*(INTER)coeffp[0*8+3];
-        out[0][i] = R(t + in[0][i]*(INTER)coeffp[0*8+0] + in[4][i]*(INTER)coeffp[0*8+4] + in[6][i]*(INTER)coeffp[0*8+6]);
-        out[1][i] = R(t + in[1][i]*(INTER)coeffp[1*8+1] + in[5][i]*(INTER)coeffp[1*8+5] + in[7][i]*(INTER)coeffp[1*8+7]);
+        INTER t = in[2][i]*coeffp[0*8+2] + in[3][i]*coeffp[0*8+3];
+        out[0][i] = R(t + in[0][i]*coeffp[0*8+0] + in[4][i]*coeffp[0*8+4] + in[6][i]*coeffp[0*8+6]);
+        out[1][i] = R(t + in[1][i]*coeffp[1*8+1] + in[5][i]*coeffp[1*8+5] + in[7][i]*coeffp[1*8+7]);
     }
 }
 
 static RENAME(mix_any_func_type) *RENAME(get_mix_any_func)(SwrContext *s){
-    if (  !av_channel_layout_compare(&s->out_ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO)
-       && (   !av_channel_layout_compare(&s->in_ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_5POINT1)
-           || !av_channel_layout_compare(&s->in_ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_5POINT1_BACK))
+    if(   s->out_ch_layout == AV_CH_LAYOUT_STEREO && (s->in_ch_layout == AV_CH_LAYOUT_5POINT1 || s->in_ch_layout == AV_CH_LAYOUT_5POINT1_BACK)
        && s->matrix[0][2] == s->matrix[1][2] && s->matrix[0][3] == s->matrix[1][3]
        && !s->matrix[0][1] && !s->matrix[0][5] && !s->matrix[1][0] && !s->matrix[1][4]
     )
         return RENAME(mix6to2);
 
-    if (  !av_channel_layout_compare(&s->out_ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO)
-       && !av_channel_layout_compare(&s->in_ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_7POINT1)
+    if(   s->out_ch_layout == AV_CH_LAYOUT_STEREO && s->in_ch_layout == AV_CH_LAYOUT_7POINT1
        && s->matrix[0][2] == s->matrix[1][2] && s->matrix[0][3] == s->matrix[1][3]
        && !s->matrix[0][1] && !s->matrix[0][5] && !s->matrix[1][0] && !s->matrix[1][4]
        && !s->matrix[0][7] && !s->matrix[1][6]

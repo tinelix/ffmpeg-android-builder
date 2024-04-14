@@ -19,15 +19,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
 
 #include "libavutil/avstring.h"
 #include "libavutil/mathematics.h"
 
-static const char *check_nan_suffix(const char *s)
+static char *check_nan_suffix(char *s)
 {
-    const char *start = s;
+    char *start = s;
 
     if (*s++ != '(')
         return start;
@@ -44,11 +45,11 @@ double strtod(const char *, char **);
 
 double avpriv_strtod(const char *nptr, char **endptr)
 {
-    const char *end;
+    char *end;
     double res;
 
     /* Skip leading spaces */
-    while (av_isspace(*nptr))
+    while (isspace(*nptr))
         nptr++;
 
     if (!av_strncasecmp(nptr, "infinity", 8)) {
@@ -81,13 +82,13 @@ double avpriv_strtod(const char *nptr, char **endptr)
                !av_strncasecmp(nptr, "+0x", 3)) {
         /* FIXME this doesn't handle exponents, non-integers (float/double)
          * and numbers too large for long long */
-        res = strtoll(nptr, (char **)&end, 16);
+        res = strtoll(nptr, &end, 16);
     } else {
-        res = strtod(nptr, (char **)&end);
+        res = strtod(nptr, &end);
     }
 
     if (endptr)
-        *endptr = (char *)end;
+        *endptr = end;
 
     return res;
 }

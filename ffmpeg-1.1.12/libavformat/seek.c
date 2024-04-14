@@ -1,6 +1,7 @@
 /*
- * Seeking and index-related functions
- * Copyright (c) 2000, 2001, 2002 Fabrice Bellard
+ * seek utility functions for use within format handlers
+ *
+ * Copyright (c) 2009 Ivan Schreter
  *
  * This file is part of FFmpeg.
  *
@@ -19,754 +20,490 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdint.h>
-
-#include "libavutil/avassert.h"
+#include "seek.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/mem.h"
-#include "libavutil/timestamp.h"
-
-#include "libavcodec/avcodec.h"
-
-#include "avformat.h"
-#include "avio_internal.h"
-#include "demux.h"
 #include "internal.h"
 
-void avpriv_update_cur_dts(AVFormatContext *s, AVStream *ref_st, int64_t timestamp)
-{
-    for (unsigned i = 0; i < s->nb_streams; i++) {
-        AVStream *const st  = s->streams[i];
-        FFStream *const sti = ffstream(st);
+// NOTE: implementation should be moved here in another patch, to keep patches
+// separated.
 
-        sti->cur_dts =
-            av_rescale(timestamp,
-                       st->time_base.den * (int64_t) ref_st->time_base.num,
-                       st->time_base.num * (int64_t) ref_st->time_base.den);
-    }
+/**
+ * helper structure describing keyframe search state of one stream
+ */
+typedef struct {
+    int64_t     pos_lo;      ///< position of the frame with low timestamp in file or INT64_MAX if not found (yet)
+    int64_t     ts_lo;       ///< frame presentation timestamp or same as pos_lo for byte seeking
+
+    int64_t     pos_hi;      ///< position of the frame with high timestamp in file or INT64_MAX if not found (yet)
+    int64_t     ts_hi;       ///< frame presentation timestamp or same as pos_hi for byte seeking
+
+    int64_t     last_pos;    ///< last known position of a frame, for multi-frame packets
+
+    int64_t     term_ts;     ///< termination timestamp (which TS we already read)
+    AVRational  term_ts_tb;  ///< timebase for term_ts
+    int64_t     first_ts;    ///< first packet timestamp in this iteration (to fill term_ts later)
+    AVRational  first_ts_tb; ///< timebase for first_ts
+
+    int         terminated;  ///< termination flag for the current iteration
+} AVSyncPoint;
+
+/**
+ * Compute a distance between timestamps.
+ *
+ * Distances are only comparable, if same time bases are used for computing
+ * distances.
+ *
+ * @param ts_hi high timestamp
+ * @param tb_hi high timestamp time base
+ * @param ts_lo low timestamp
+ * @param tb_lo low timestamp time base
+ * @return representation of distance between high and low timestamps
+ */
+static int64_t ts_distance(int64_t ts_hi,
+                           AVRational tb_hi,
+                           int64_t ts_lo,
+                           AVRational tb_lo)
+{
+    int64_t hi, lo;
+
+    hi = ts_hi * tb_hi.num * tb_lo.den;
+    lo = ts_lo * tb_lo.num * tb_hi.den;
+
+    return hi - lo;
 }
 
-void ff_reduce_index(AVFormatContext *s, int stream_index)
+/**
+ * Partial search for keyframes in multiple streams.
+ *
+ * This routine searches in each stream for the next lower and the next higher
+ * timestamp compared to the given target timestamp. The search starts at the current
+ * file position and ends at the file position, where all streams have already been
+ * examined (or when all higher key frames are found in the first iteration).
+ *
+ * This routine is called iteratively with an exponential backoff to find the lower
+ * timestamp.
+ *
+ * @param s                 format context
+ * @param timestamp         target timestamp (or position, if AVSEEK_FLAG_BYTE)
+ * @param timebase          time base for timestamps
+ * @param flags             seeking flags
+ * @param sync              array with information per stream
+ * @param keyframes_to_find count of keyframes to find in total
+ * @param found_lo          ptr to the count of already found low timestamp keyframes
+ * @param found_hi          ptr to the count of already found high timestamp keyframes
+ * @param first_iter        flag for first iteration
+ */
+static void search_hi_lo_keyframes(AVFormatContext *s,
+                                   int64_t timestamp,
+                                   AVRational timebase,
+                                   int flags,
+                                   AVSyncPoint *sync,
+                                   int keyframes_to_find,
+                                   int *found_lo,
+                                   int *found_hi,
+                                   int first_iter)
 {
-    AVStream *const st  = s->streams[stream_index];
-    FFStream *const sti = ffstream(st);
-    unsigned int max_entries = s->max_index_size / sizeof(AVIndexEntry);
+    AVPacket pkt;
+    AVSyncPoint *sp;
+    AVStream *st;
+    int idx;
+    int flg;
+    int terminated_count = 0;
+    int64_t pos;
+    int64_t pts, dts;   // PTS/DTS from stream
+    int64_t ts;         // PTS in stream-local time base or position for byte seeking
+    AVRational ts_tb;   // Time base of the stream or 1:1 for byte seeking
 
-    if ((unsigned) sti->nb_index_entries >= max_entries) {
-        int i;
-        for (i = 0; 2 * i < sti->nb_index_entries; i++)
-            sti->index_entries[i] = sti->index_entries[2 * i];
-        sti->nb_index_entries = i;
-    }
-}
-
-int ff_add_index_entry(AVIndexEntry **index_entries,
-                       int *nb_index_entries,
-                       unsigned int *index_entries_allocated_size,
-                       int64_t pos, int64_t timestamp,
-                       int size, int distance, int flags)
-{
-    AVIndexEntry *entries, *ie;
-    int index;
-
-    if ((unsigned) *nb_index_entries + 1 >= UINT_MAX / sizeof(AVIndexEntry))
-        return -1;
-
-    if (timestamp == AV_NOPTS_VALUE)
-        return AVERROR(EINVAL);
-
-    if (size < 0 || size > 0x3FFFFFFF)
-        return AVERROR(EINVAL);
-
-    if (is_relative(timestamp)) //FIXME this maintains previous behavior but we should shift by the correct offset once known
-        timestamp -= RELATIVE_TS_BASE;
-
-    entries = av_fast_realloc(*index_entries,
-                              index_entries_allocated_size,
-                              (*nb_index_entries + 1) *
-                              sizeof(AVIndexEntry));
-    if (!entries)
-        return -1;
-
-    *index_entries = entries;
-
-    index = ff_index_search_timestamp(*index_entries, *nb_index_entries,
-                                      timestamp, AVSEEK_FLAG_ANY);
-    if (index < 0) {
-        index = (*nb_index_entries)++;
-        ie    = &entries[index];
-        av_assert0(index == 0 || ie[-1].timestamp < timestamp);
-    } else {
-        ie = &entries[index];
-        if (ie->timestamp != timestamp) {
-            if (ie->timestamp <= timestamp)
-                return -1;
-            memmove(entries + index + 1, entries + index,
-                    sizeof(AVIndexEntry) * (*nb_index_entries - index));
-            (*nb_index_entries)++;
-        } else if (ie->pos == pos && distance < ie->min_distance)
-            // do not reduce the distance
-            distance = ie->min_distance;
-    }
-
-    ie->pos          = pos;
-    ie->timestamp    = timestamp;
-    ie->min_distance = distance;
-    ie->size         = size;
-    ie->flags        = flags;
-
-    return index;
-}
-
-int av_add_index_entry(AVStream *st, int64_t pos, int64_t timestamp,
-                       int size, int distance, int flags)
-{
-    FFStream *const sti = ffstream(st);
-    timestamp = ff_wrap_timestamp(st, timestamp);
-    return ff_add_index_entry(&sti->index_entries, &sti->nb_index_entries,
-                              &sti->index_entries_allocated_size, pos,
-                              timestamp, size, distance, flags);
-}
-
-int ff_index_search_timestamp(const AVIndexEntry *entries, int nb_entries,
-                              int64_t wanted_timestamp, int flags)
-{
-    int a, b, m;
-    int64_t timestamp;
-
-    a = -1;
-    b = nb_entries;
-
-    // Optimize appending index entries at the end.
-    if (b && entries[b - 1].timestamp < wanted_timestamp)
-        a = b - 1;
-
-    while (b - a > 1) {
-        m         = (a + b) >> 1;
-
-        // Search for the next non-discarded packet.
-        while ((entries[m].flags & AVINDEX_DISCARD_FRAME) && m < b && m < nb_entries - 1) {
-            m++;
-            if (m == b && entries[m].timestamp >= wanted_timestamp) {
-                m = b - 1;
-                break;
+    for (;;) {
+        if (av_read_frame(s, &pkt) < 0) {
+            // EOF or error, make sure high flags are set
+            for (idx = 0; idx < s->nb_streams; ++idx) {
+                if (s->streams[idx]->discard < AVDISCARD_ALL) {
+                    sp = &sync[idx];
+                    if (sp->pos_hi == INT64_MAX) {
+                        // no high frame exists for this stream
+                        (*found_hi)++;
+                        sp->ts_hi  = INT64_MAX;
+                        sp->pos_hi = INT64_MAX - 1;
+                    }
+                }
             }
+            break;
         }
 
-        timestamp = entries[m].timestamp;
-        if (timestamp >= wanted_timestamp)
-            b = m;
-        if (timestamp <= wanted_timestamp)
-            a = m;
-    }
-    m = (flags & AVSEEK_FLAG_BACKWARD) ? a : b;
+        idx = pkt.stream_index;
+        st = s->streams[idx];
+        if (st->discard >= AVDISCARD_ALL)
+            // this stream is not active, skip packet
+            continue;
 
-    if (!(flags & AVSEEK_FLAG_ANY))
-        while (m >= 0 && m < nb_entries &&
-               !(entries[m].flags & AVINDEX_KEYFRAME))
-            m += (flags & AVSEEK_FLAG_BACKWARD) ? -1 : 1;
+        sp = &sync[idx];
 
-    if (m == nb_entries)
-        return -1;
-    return m;
-}
+        flg = pkt.flags;
+        pos = pkt.pos;
+        pts = pkt.pts;
+        dts = pkt.dts;
+        if (pts == AV_NOPTS_VALUE)
+            // some formats don't provide PTS, only DTS
+            pts = dts;
 
-void ff_configure_buffers_for_index(AVFormatContext *s, int64_t time_tolerance)
-{
-    int64_t pos_delta = 0;
-    int64_t skip = 0;
-    //We could use URLProtocol flags here but as many user applications do not use URLProtocols this would be unreliable
-    const char *proto = avio_find_protocol_name(s->url);
-    FFIOContext *ctx;
+        av_free_packet(&pkt);
 
-    av_assert0(time_tolerance >= 0);
+        // Multi-frame packets only return position for the very first frame.
+        // Other frames are read with position == -1. Therefore, we note down
+        // last known position of a frame and use it if a frame without
+        // position arrives. In this way, it's possible to seek to proper
+        // position. Additionally, for parsers not providing position at all,
+        // an approximation will be used (starting position of this iteration).
+        if (pos < 0)
+            pos = sp->last_pos;
+        else
+            sp->last_pos = pos;
 
-    if (!proto) {
-        av_log(s, AV_LOG_INFO,
-               "Protocol name not provided, cannot determine if input is local or "
-               "a network protocol, buffers and access patterns cannot be configured "
-               "optimally without knowing the protocol\n");
-    }
+        // Evaluate key frames with known TS (or any frames, if AVSEEK_FLAG_ANY set).
+        if (pts != AV_NOPTS_VALUE &&
+            ((flg & AV_PKT_FLAG_KEY) || (flags & AVSEEK_FLAG_ANY))) {
+            if (flags & AVSEEK_FLAG_BYTE) {
+                // for byte seeking, use position as timestamp
+                ts        = pos;
+                ts_tb.num = 1;
+                ts_tb.den = 1;
+            } else {
+                // otherwise, get stream time_base
+                ts    = pts;
+                ts_tb = st->time_base;
+            }
 
-    if (proto && !(strcmp(proto, "file") && strcmp(proto, "pipe") && strcmp(proto, "cache")))
-        return;
+            if (sp->first_ts == AV_NOPTS_VALUE) {
+                // Note down termination timestamp for the next iteration - when
+                // we encounter a packet with the same timestamp, we will ignore
+                // any further packets for this stream in next iteration (as they
+                // are already evaluated).
+                sp->first_ts    = ts;
+                sp->first_ts_tb = ts_tb;
+            }
 
-    for (unsigned ist1 = 0; ist1 < s->nb_streams; ist1++) {
-        AVStream *const st1  = s->streams[ist1];
-        FFStream *const sti1 = ffstream(st1);
-        for (unsigned ist2 = 0; ist2 < s->nb_streams; ist2++) {
-            AVStream *const st2  = s->streams[ist2];
-            FFStream *const sti2 = ffstream(st2);
-
-            if (ist1 == ist2)
+            if (sp->term_ts != AV_NOPTS_VALUE &&
+                av_compare_ts(ts, ts_tb, sp->term_ts, sp->term_ts_tb) > 0) {
+                // past the end position from last iteration, ignore packet
+                if (!sp->terminated) {
+                    sp->terminated = 1;
+                    ++terminated_count;
+                    if (sp->pos_hi == INT64_MAX) {
+                        // no high frame exists for this stream
+                        (*found_hi)++;
+                        sp->ts_hi  = INT64_MAX;
+                        sp->pos_hi = INT64_MAX - 1;
+                    }
+                    if (terminated_count == keyframes_to_find)
+                        break;  // all terminated, iteration done
+                }
                 continue;
+            }
 
-            for (int i1 = 0, i2 = 0; i1 < sti1->nb_index_entries; i1++) {
-                const AVIndexEntry *const e1 = &sti1->index_entries[i1];
-                int64_t e1_pts = av_rescale_q(e1->timestamp, st1->time_base, AV_TIME_BASE_Q);
-
-                if (e1->size < (1 << 23))
-                    skip = FFMAX(skip, e1->size);
-
-                for (; i2 < sti2->nb_index_entries; i2++) {
-                    const AVIndexEntry *const e2 = &sti2->index_entries[i2];
-                    int64_t e2_pts = av_rescale_q(e2->timestamp, st2->time_base, AV_TIME_BASE_Q);
-                    int64_t cur_delta;
-                    if (e2_pts < e1_pts || e2_pts - (uint64_t)e1_pts < time_tolerance)
-                        continue;
-                    cur_delta = FFABS(e1->pos - e2->pos);
-                    if (cur_delta < (1 << 23))
-                        pos_delta = FFMAX(pos_delta, cur_delta);
-                    break;
+            if (av_compare_ts(ts, ts_tb, timestamp, timebase) <= 0) {
+                // keyframe found before target timestamp
+                if (sp->pos_lo == INT64_MAX) {
+                    // found first keyframe lower than target timestamp
+                    (*found_lo)++;
+                    sp->ts_lo  = ts;
+                    sp->pos_lo = pos;
+                } else if (sp->ts_lo < ts) {
+                    // found a better match (closer to target timestamp)
+                    sp->ts_lo  = ts;
+                    sp->pos_lo = pos;
+                }
+            }
+            if (av_compare_ts(ts, ts_tb, timestamp, timebase) >= 0) {
+                // keyframe found after target timestamp
+                if (sp->pos_hi == INT64_MAX) {
+                    // found first keyframe higher than target timestamp
+                    (*found_hi)++;
+                    sp->ts_hi  = ts;
+                    sp->pos_hi = pos;
+                    if (*found_hi >= keyframes_to_find && first_iter) {
+                        // We found high frame for all. They may get updated
+                        // to TS closer to target TS in later iterations (which
+                        // will stop at start position of previous iteration).
+                        break;
+                    }
+                } else if (sp->ts_hi > ts) {
+                    // found a better match (actually, shouldn't happen)
+                    sp->ts_hi  = ts;
+                    sp->pos_hi = pos;
                 }
             }
         }
     }
 
-    pos_delta *= 2;
-    ctx = ffiocontext(s->pb);
-    /* XXX This could be adjusted depending on protocol*/
-    if (s->pb->buffer_size < pos_delta) {
-        av_log(s, AV_LOG_VERBOSE, "Reconfiguring buffers to size %"PRId64"\n", pos_delta);
-
-        /* realloc the buffer and the original data will be retained */
-        if (ffio_realloc_buf(s->pb, pos_delta)) {
-            av_log(s, AV_LOG_ERROR, "Realloc buffer fail.\n");
-            return;
-        }
-
-        ctx->short_seek_threshold = FFMAX(ctx->short_seek_threshold, pos_delta/2);
-    }
-
-    ctx->short_seek_threshold = FFMAX(ctx->short_seek_threshold, skip);
-}
-
-int av_index_search_timestamp(AVStream *st, int64_t wanted_timestamp, int flags)
-{
-    const FFStream *const sti = ffstream(st);
-    return ff_index_search_timestamp(sti->index_entries, sti->nb_index_entries,
-                                     wanted_timestamp, flags);
-}
-
-int avformat_index_get_entries_count(const AVStream *st)
-{
-    return cffstream(st)->nb_index_entries;
-}
-
-const AVIndexEntry *avformat_index_get_entry(AVStream *st, int idx)
-{
-    const FFStream *const sti = ffstream(st);
-    if (idx < 0 || idx >= sti->nb_index_entries)
-        return NULL;
-
-    return &sti->index_entries[idx];
-}
-
-const AVIndexEntry *avformat_index_get_entry_from_timestamp(AVStream *st,
-                                                            int64_t wanted_timestamp,
-                                                            int flags)
-{
-    const FFStream *const sti = ffstream(st);
-    int idx = ff_index_search_timestamp(sti->index_entries,
-                                        sti->nb_index_entries,
-                                        wanted_timestamp, flags);
-
-    if (idx < 0)
-        return NULL;
-
-    return &sti->index_entries[idx];
-}
-
-static int64_t read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit,
-                              int64_t (*read_timestamp)(struct AVFormatContext *, int , int64_t *, int64_t ))
-{
-    int64_t ts = read_timestamp(s, stream_index, ppos, pos_limit);
-    if (stream_index >= 0)
-        ts = ff_wrap_timestamp(s->streams[stream_index], ts);
-    return ts;
-}
-
-int ff_seek_frame_binary(AVFormatContext *s, int stream_index,
-                         int64_t target_ts, int flags)
-{
-    const FFInputFormat *const avif = ffifmt(s->iformat);
-    int64_t pos_min = 0, pos_max = 0, pos, pos_limit;
-    int64_t ts_min, ts_max, ts;
-    int index;
-    int64_t ret;
-    AVStream *st;
-    FFStream *sti;
-
-    if (stream_index < 0)
-        return -1;
-
-    av_log(s, AV_LOG_TRACE, "read_seek: %d %s\n", stream_index, av_ts2str(target_ts));
-
-    ts_max =
-    ts_min = AV_NOPTS_VALUE;
-    pos_limit = -1; // GCC falsely says it may be uninitialized.
-
-    st  = s->streams[stream_index];
-    sti = ffstream(st);
-    if (sti->index_entries) {
-        const AVIndexEntry *e;
-
-        /* FIXME: Whole function must be checked for non-keyframe entries in
-         * index case, especially read_timestamp(). */
-        index = av_index_search_timestamp(st, target_ts,
-                                          flags | AVSEEK_FLAG_BACKWARD);
-        index = FFMAX(index, 0);
-        e     = &sti->index_entries[index];
-
-        if (e->timestamp <= target_ts || e->pos == e->min_distance) {
-            pos_min = e->pos;
-            ts_min  = e->timestamp;
-            av_log(s, AV_LOG_TRACE, "using cached pos_min=0x%"PRIx64" dts_min=%s\n",
-                    pos_min, av_ts2str(ts_min));
-        } else {
-            av_assert1(index == 0);
-        }
-
-        index = av_index_search_timestamp(st, target_ts,
-                                          flags & ~AVSEEK_FLAG_BACKWARD);
-        av_assert0(index < sti->nb_index_entries);
-        if (index >= 0) {
-            e = &sti->index_entries[index];
-            av_assert1(e->timestamp >= target_ts);
-            pos_max   = e->pos;
-            ts_max    = e->timestamp;
-            pos_limit = pos_max - e->min_distance;
-            av_log(s, AV_LOG_TRACE, "using cached pos_max=0x%"PRIx64" pos_limit=0x%"PRIx64
-                    " dts_max=%s\n", pos_max, pos_limit, av_ts2str(ts_max));
-        }
-    }
-
-    pos = ff_gen_search(s, stream_index, target_ts, pos_min, pos_max, pos_limit,
-                        ts_min, ts_max, flags, &ts, avif->read_timestamp);
-    if (pos < 0)
-        return -1;
-
-    /* do the seek */
-    if ((ret = avio_seek(s->pb, pos, SEEK_SET)) < 0)
-        return ret;
-
+    // Clean up the parser.
     ff_read_frame_flush(s);
-    avpriv_update_cur_dts(s, st, ts);
-
-    return 0;
 }
 
-int ff_find_last_ts(AVFormatContext *s, int stream_index, int64_t *ts, int64_t *pos,
-                    int64_t (*read_timestamp_func)(struct AVFormatContext *, int , int64_t *, int64_t ))
+int64_t ff_gen_syncpoint_search(AVFormatContext *s,
+                                int stream_index,
+                                int64_t pos,
+                                int64_t ts_min,
+                                int64_t ts,
+                                int64_t ts_max,
+                                int flags)
 {
-    int64_t step = 1024;
-    int64_t limit, ts_max;
-    int64_t filesize = avio_size(s->pb);
-    int64_t pos_max  = filesize - 1;
-    do {
-        limit   = pos_max;
-        pos_max = FFMAX(0, (pos_max) - step);
-        ts_max  = read_timestamp(s, stream_index,
-                                 &pos_max, limit, read_timestamp_func);
-        step   += step;
-    } while (ts_max == AV_NOPTS_VALUE && 2*limit > step);
-    if (ts_max == AV_NOPTS_VALUE)
+    AVSyncPoint *sync, *sp;
+    AVStream *st;
+    int i;
+    int keyframes_to_find = 0;
+    int64_t curpos;
+    int64_t step;
+    int found_lo = 0, found_hi = 0;
+    int64_t min_distance, distance;
+    int64_t min_pos = 0;
+    int first_iter = 1;
+    AVRational time_base;
+
+    if (flags & AVSEEK_FLAG_BYTE) {
+        // for byte seeking, we have exact 1:1 "timestamps" - positions
+        time_base.num = 1;
+        time_base.den = 1;
+    } else {
+        if (stream_index >= 0) {
+            // we have a reference stream, which time base we use
+            st = s->streams[stream_index];
+            time_base = st->time_base;
+        } else {
+            // no reference stream, use AV_TIME_BASE as reference time base
+            time_base.num = 1;
+            time_base.den = AV_TIME_BASE;
+        }
+    }
+
+    // Initialize syncpoint structures for each stream.
+    sync = av_malloc(s->nb_streams * sizeof(AVSyncPoint));
+    if (!sync)
+        // cannot allocate helper structure
         return -1;
 
+    for (i = 0; i < s->nb_streams; ++i) {
+        st = s->streams[i];
+        sp = &sync[i];
+
+        sp->pos_lo     = INT64_MAX;
+        sp->ts_lo      = INT64_MAX;
+        sp->pos_hi     = INT64_MAX;
+        sp->ts_hi      = INT64_MAX;
+        sp->terminated = 0;
+        sp->first_ts   = AV_NOPTS_VALUE;
+        sp->term_ts    = ts_max;
+        sp->term_ts_tb = time_base;
+        sp->last_pos   = pos;
+
+        st->cur_dts    = AV_NOPTS_VALUE;
+
+        if (st->discard < AVDISCARD_ALL)
+            ++keyframes_to_find;
+    }
+
+    if (!keyframes_to_find) {
+        // no stream active, error
+        av_free(sync);
+        return -1;
+    }
+
+    // Find keyframes in all active streams with timestamp/position just before
+    // and just after requested timestamp/position.
+    step = s->pb->buffer_size;
+    curpos = FFMAX(pos - step / 2, 0);
     for (;;) {
-        int64_t tmp_pos = pos_max + 1;
-        int64_t tmp_ts  = read_timestamp(s, stream_index,
-                                         &tmp_pos, INT64_MAX, read_timestamp_func);
-        if (tmp_ts == AV_NOPTS_VALUE)
-            break;
-        av_assert0(tmp_pos > pos_max);
-        ts_max  = tmp_ts;
-        pos_max = tmp_pos;
-        if (tmp_pos >= filesize)
-            break;
-    }
+        avio_seek(s->pb, curpos, SEEK_SET);
+        search_hi_lo_keyframes(s,
+                               ts, time_base,
+                               flags,
+                               sync,
+                               keyframes_to_find,
+                               &found_lo, &found_hi,
+                               first_iter);
+        if (found_lo == keyframes_to_find && found_hi == keyframes_to_find)
+            break;  // have all keyframes we wanted
+        if (!curpos)
+            break;  // cannot go back anymore
 
-    if (ts)
-        *ts  = ts_max;
-    if (pos)
-        *pos = pos_max;
+        curpos = pos - step;
+        if (curpos < 0)
+            curpos = 0;
+        step *= 2;
 
-    return 0;
-}
+        // switch termination positions
+        for (i = 0; i < s->nb_streams; ++i) {
+            st = s->streams[i];
+            st->cur_dts = AV_NOPTS_VALUE;
 
-int64_t ff_gen_search(AVFormatContext *s, int stream_index, int64_t target_ts,
-                      int64_t pos_min, int64_t pos_max, int64_t pos_limit,
-                      int64_t ts_min, int64_t ts_max,
-                      int flags, int64_t *ts_ret,
-                      int64_t (*read_timestamp_func)(struct AVFormatContext *,
-                                                     int, int64_t *, int64_t))
-{
-    FFFormatContext *const si = ffformatcontext(s);
-    int64_t pos, ts;
-    int64_t start_pos;
-    int no_change;
-    int ret;
-
-    av_log(s, AV_LOG_TRACE, "gen_seek: %d %s\n", stream_index, av_ts2str(target_ts));
-
-    if (ts_min == AV_NOPTS_VALUE) {
-        pos_min = si->data_offset;
-        ts_min  = read_timestamp(s, stream_index, &pos_min, INT64_MAX, read_timestamp_func);
-        if (ts_min == AV_NOPTS_VALUE)
-            return -1;
-    }
-
-    if (ts_min >= target_ts) {
-        *ts_ret = ts_min;
-        return pos_min;
-    }
-
-    if (ts_max == AV_NOPTS_VALUE) {
-        if ((ret = ff_find_last_ts(s, stream_index, &ts_max, &pos_max, read_timestamp_func)) < 0)
-            return ret;
-        pos_limit = pos_max;
-    }
-
-    if (ts_max <= target_ts) {
-        *ts_ret = ts_max;
-        return pos_max;
-    }
-
-    av_assert0(ts_min < ts_max);
-
-    no_change = 0;
-    while (pos_min < pos_limit) {
-        av_log(s, AV_LOG_TRACE,
-                "pos_min=0x%"PRIx64" pos_max=0x%"PRIx64" dts_min=%s dts_max=%s\n",
-                pos_min, pos_max, av_ts2str(ts_min), av_ts2str(ts_max));
-        av_assert0(pos_limit <= pos_max);
-
-        if (no_change == 0) {
-            int64_t approximate_keyframe_distance = pos_max - pos_limit;
-            // interpolate position (better than dichotomy)
-            pos = av_rescale(target_ts - ts_min, pos_max - pos_min,
-                             ts_max - ts_min) +
-                  pos_min - approximate_keyframe_distance;
-        } else if (no_change == 1) {
-            // bisection if interpolation did not change min / max pos last time
-            pos = (pos_min + pos_limit) >> 1;
-        } else {
-            /* linear search if bisection failed, can only happen if there
-             * are very few or no keyframes between min/max */
-            pos = pos_min;
+            sp = &sync[i];
+            if (sp->first_ts != AV_NOPTS_VALUE) {
+                sp->term_ts    = sp->first_ts;
+                sp->term_ts_tb = sp->first_ts_tb;
+                sp->first_ts   = AV_NOPTS_VALUE;
+            }
+            sp->terminated = 0;
+            sp->last_pos = curpos;
         }
-        if (pos <= pos_min)
-            pos = pos_min + 1;
-        else if (pos > pos_limit)
-            pos = pos_limit;
-        start_pos = pos;
+        first_iter = 0;
+    }
 
-        // May pass pos_limit instead of -1.
-        ts = read_timestamp(s, stream_index, &pos, INT64_MAX, read_timestamp_func);
-        if (pos == pos_max)
-            no_change++;
-        else
-            no_change = 0;
-        av_log(s, AV_LOG_TRACE, "%"PRId64" %"PRId64" %"PRId64" / %s %s %s"
-                " target:%s limit:%"PRId64" start:%"PRId64" noc:%d\n",
-                pos_min, pos, pos_max,
-                av_ts2str(ts_min), av_ts2str(ts), av_ts2str(ts_max), av_ts2str(target_ts),
-                pos_limit, start_pos, no_change);
-        if (ts == AV_NOPTS_VALUE) {
-            av_log(s, AV_LOG_ERROR, "read_timestamp() failed in the middle\n");
-            return -1;
-        }
-        if (target_ts <= ts) {
-            pos_limit = start_pos - 1;
-            pos_max   = pos;
-            ts_max    = ts;
-        }
-        if (target_ts >= ts) {
-            pos_min = pos;
-            ts_min  = ts;
+    // Find actual position to start decoding so that decoder synchronizes
+    // closest to ts and between ts_min and ts_max.
+    pos = INT64_MAX;
+
+    for (i = 0; i < s->nb_streams; ++i) {
+        st = s->streams[i];
+        if (st->discard < AVDISCARD_ALL) {
+            sp = &sync[i];
+            min_distance = INT64_MAX;
+            // Find timestamp closest to requested timestamp within min/max limits.
+            if (sp->pos_lo != INT64_MAX
+                && av_compare_ts(ts_min, time_base, sp->ts_lo, st->time_base) <= 0
+                && av_compare_ts(sp->ts_lo, st->time_base, ts_max, time_base) <= 0) {
+                // low timestamp is in range
+                min_distance = ts_distance(ts, time_base, sp->ts_lo, st->time_base);
+                min_pos = sp->pos_lo;
+            }
+            if (sp->pos_hi != INT64_MAX
+                && av_compare_ts(ts_min, time_base, sp->ts_hi, st->time_base) <= 0
+                && av_compare_ts(sp->ts_hi, st->time_base, ts_max, time_base) <= 0) {
+                // high timestamp is in range, check distance
+                distance = ts_distance(sp->ts_hi, st->time_base, ts, time_base);
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    min_pos = sp->pos_hi;
+                }
+            }
+            if (min_distance == INT64_MAX) {
+                // no timestamp is in range, cannot seek
+                av_free(sync);
+                return -1;
+            }
+            if (min_pos < pos)
+                pos = min_pos;
         }
     }
 
-    pos     = (flags & AVSEEK_FLAG_BACKWARD) ? pos_min : pos_max;
-    ts      = (flags & AVSEEK_FLAG_BACKWARD) ? ts_min  : ts_max;
-#if 0
-    pos_min = pos;
-    ts_min  = read_timestamp(s, stream_index, &pos_min, INT64_MAX, read_timestamp_func);
-    pos_min++;
-    ts_max  = read_timestamp(s, stream_index, &pos_min, INT64_MAX, read_timestamp_func);
-    av_log(s, AV_LOG_TRACE, "pos=0x%"PRIx64" %s<=%s<=%s\n",
-            pos, av_ts2str(ts_min), av_ts2str(target_ts), av_ts2str(ts_max));
-#endif
-    *ts_ret = ts;
+    avio_seek(s->pb, pos, SEEK_SET);
+    av_free(sync);
     return pos;
 }
 
-static int seek_frame_byte(AVFormatContext *s, int stream_index,
-                           int64_t pos, int flags)
+AVParserState *ff_store_parser_state(AVFormatContext *s)
 {
-    FFFormatContext *const si = ffformatcontext(s);
-    int64_t pos_min, pos_max;
-
-    pos_min = si->data_offset;
-    pos_max = avio_size(s->pb) - 1;
-
-    if (pos < pos_min)
-        pos = pos_min;
-    else if (pos > pos_max)
-        pos = pos_max;
-
-    avio_seek(s->pb, pos, SEEK_SET);
-
-    s->io_repositioned = 1;
-
-    return 0;
-}
-
-static int seek_frame_generic(AVFormatContext *s, int stream_index,
-                              int64_t timestamp, int flags)
-{
-    FFFormatContext *const si = ffformatcontext(s);
-    AVStream *const st  = s->streams[stream_index];
-    FFStream *const sti = ffstream(st);
-    const AVIndexEntry *ie;
-    int index;
-    int64_t ret;
-
-    index = av_index_search_timestamp(st, timestamp, flags);
-
-    if (index < 0 && sti->nb_index_entries &&
-        timestamp < sti->index_entries[0].timestamp)
-        return -1;
-
-    if (index < 0 || index == sti->nb_index_entries - 1) {
-        AVPacket *const pkt = si->pkt;
-        int nonkey = 0;
-
-        if (sti->nb_index_entries) {
-            av_assert0(sti->index_entries);
-            ie = &sti->index_entries[sti->nb_index_entries - 1];
-            if ((ret = avio_seek(s->pb, ie->pos, SEEK_SET)) < 0)
-                return ret;
-            s->io_repositioned = 1;
-            avpriv_update_cur_dts(s, st, ie->timestamp);
-        } else {
-            if ((ret = avio_seek(s->pb, si->data_offset, SEEK_SET)) < 0)
-                return ret;
-            s->io_repositioned = 1;
-        }
-        av_packet_unref(pkt);
-        for (;;) {
-            int read_status;
-            do {
-                read_status = av_read_frame(s, pkt);
-            } while (read_status == AVERROR(EAGAIN));
-            if (read_status < 0)
-                break;
-            if (stream_index == pkt->stream_index && pkt->dts > timestamp) {
-                if (pkt->flags & AV_PKT_FLAG_KEY) {
-                    av_packet_unref(pkt);
-                    break;
-                }
-                if (nonkey++ > 1000 && st->codecpar->codec_id != AV_CODEC_ID_CDGRAPHICS) {
-                    av_log(s, AV_LOG_ERROR,"seek_frame_generic failed as this stream seems to contain no keyframes after the target timestamp, %d non keyframes found\n", nonkey);
-                    av_packet_unref(pkt);
-                    break;
-                }
-            }
-            av_packet_unref(pkt);
-        }
-        index = av_index_search_timestamp(st, timestamp, flags);
-    }
-    if (index < 0)
-        return -1;
-
-    ff_read_frame_flush(s);
-    if (ffifmt(s->iformat)->read_seek)
-        if (ffifmt(s->iformat)->read_seek(s, stream_index, timestamp, flags) >= 0)
-            return 0;
-    ie = &sti->index_entries[index];
-    if ((ret = avio_seek(s->pb, ie->pos, SEEK_SET)) < 0)
-        return ret;
-    s->io_repositioned = 1;
-    avpriv_update_cur_dts(s, st, ie->timestamp);
-
-    return 0;
-}
-
-static int seek_frame_internal(AVFormatContext *s, int stream_index,
-                               int64_t timestamp, int flags)
-{
+    int i;
     AVStream *st;
-    int ret;
+    AVParserStreamState *ss;
+    AVParserState *state = av_malloc(sizeof(AVParserState));
+    if (!state)
+        return NULL;
 
-    if (flags & AVSEEK_FLAG_BYTE) {
-        if (s->iformat->flags & AVFMT_NO_BYTE_SEEK)
-            return -1;
-        ff_read_frame_flush(s);
-        return seek_frame_byte(s, stream_index, timestamp, flags);
+    state->stream_states = av_malloc(sizeof(AVParserStreamState) * s->nb_streams);
+    if (!state->stream_states) {
+        av_free(state);
+        return NULL;
     }
 
-    if (stream_index < 0) {
-        stream_index = av_find_default_stream_index(s);
-        if (stream_index < 0)
-            return -1;
+    state->fpos = avio_tell(s->pb);
 
-        st = s->streams[stream_index];
-        /* timestamp for default must be expressed in AV_TIME_BASE units */
-        timestamp = av_rescale(timestamp, st->time_base.den,
-                               AV_TIME_BASE * (int64_t) st->time_base.num);
+    // copy context structures
+    state->packet_buffer                    = s->packet_buffer;
+    state->parse_queue                      = s->parse_queue;
+    state->raw_packet_buffer                = s->raw_packet_buffer;
+    state->raw_packet_buffer_remaining_size = s->raw_packet_buffer_remaining_size;
+
+    s->packet_buffer                        = NULL;
+    s->parse_queue                          = NULL;
+    s->raw_packet_buffer                    = NULL;
+    s->raw_packet_buffer_remaining_size     = RAW_PACKET_BUFFER_SIZE;
+
+    // copy stream structures
+    state->nb_streams = s->nb_streams;
+    for (i = 0; i < s->nb_streams; i++) {
+        st = s->streams[i];
+        ss = &state->stream_states[i];
+
+        ss->parser        = st->parser;
+        ss->last_IP_pts   = st->last_IP_pts;
+        ss->cur_dts       = st->cur_dts;
+        ss->reference_dts = st->reference_dts;
+        ss->probe_packets = st->probe_packets;
+
+        st->parser        = NULL;
+        st->last_IP_pts   = AV_NOPTS_VALUE;
+        st->cur_dts       = AV_NOPTS_VALUE;
+        st->reference_dts = AV_NOPTS_VALUE;
+        st->probe_packets = MAX_PROBE_PACKETS;
     }
 
-    /* first, we try the format specific seek */
-    if (ffifmt(s->iformat)->read_seek) {
-        ff_read_frame_flush(s);
-        ret = ffifmt(s->iformat)->read_seek(s, stream_index, timestamp, flags);
-    } else
-        ret = -1;
-    if (ret >= 0)
-        return 0;
-
-    if (ffifmt(s->iformat)->read_timestamp &&
-        !(s->iformat->flags & AVFMT_NOBINSEARCH)) {
-        ff_read_frame_flush(s);
-        return ff_seek_frame_binary(s, stream_index, timestamp, flags);
-    } else if (!(s->iformat->flags & AVFMT_NOGENSEARCH)) {
-        ff_read_frame_flush(s);
-        return seek_frame_generic(s, stream_index, timestamp, flags);
-    } else
-        return -1;
+    return state;
 }
 
-int av_seek_frame(AVFormatContext *s, int stream_index,
-                  int64_t timestamp, int flags)
+void ff_restore_parser_state(AVFormatContext *s, AVParserState *state)
 {
-    int ret;
-
-    if (ffifmt(s->iformat)->read_seek2 && !ffifmt(s->iformat)->read_seek) {
-        int64_t min_ts = INT64_MIN, max_ts = INT64_MAX;
-        if ((flags & AVSEEK_FLAG_BACKWARD))
-            max_ts = timestamp;
-        else
-            min_ts = timestamp;
-        return avformat_seek_file(s, stream_index, min_ts, timestamp, max_ts,
-                                  flags & ~AVSEEK_FLAG_BACKWARD);
-    }
-
-    ret = seek_frame_internal(s, stream_index, timestamp, flags);
-
-    if (ret >= 0)
-        ret = avformat_queue_attached_pictures(s);
-
-    return ret;
-}
-
-int avformat_seek_file(AVFormatContext *s, int stream_index, int64_t min_ts,
-                       int64_t ts, int64_t max_ts, int flags)
-{
-    if (min_ts > ts || max_ts < ts)
-        return -1;
-    if (stream_index < -1 || stream_index >= (int)s->nb_streams)
-        return AVERROR(EINVAL);
-
-    if (s->seek2any > 0)
-        flags |= AVSEEK_FLAG_ANY;
-    flags &= ~AVSEEK_FLAG_BACKWARD;
-
-    if (ffifmt(s->iformat)->read_seek2) {
-        int ret;
-        ff_read_frame_flush(s);
-
-        if (stream_index == -1 && s->nb_streams == 1) {
-            AVRational time_base = s->streams[0]->time_base;
-            ts = av_rescale_q(ts, AV_TIME_BASE_Q, time_base);
-            min_ts = av_rescale_rnd(min_ts, time_base.den,
-                                    time_base.num * (int64_t)AV_TIME_BASE,
-                                    AV_ROUND_UP   | AV_ROUND_PASS_MINMAX);
-            max_ts = av_rescale_rnd(max_ts, time_base.den,
-                                    time_base.num * (int64_t)AV_TIME_BASE,
-                                    AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX);
-            stream_index = 0;
-        }
-
-        ret = ffifmt(s->iformat)->read_seek2(s, stream_index, min_ts,
-                                     ts, max_ts, flags);
-
-        if (ret >= 0)
-            ret = avformat_queue_attached_pictures(s);
-        return ret;
-    }
-
-    if (ffifmt(s->iformat)->read_timestamp) {
-        // try to seek via read_timestamp()
-    }
-
-    // Fall back on old API if new is not implemented but old is.
-    // Note the old API has somewhat different semantics.
-    if (ffifmt(s->iformat)->read_seek || 1) {
-        int dir = (ts - (uint64_t)min_ts > (uint64_t)max_ts - ts ? AVSEEK_FLAG_BACKWARD : 0);
-        int ret = av_seek_frame(s, stream_index, ts, flags | dir);
-        if (ret < 0 && ts != min_ts && max_ts != ts) {
-            ret = av_seek_frame(s, stream_index, dir ? max_ts : min_ts, flags | dir);
-            if (ret >= 0)
-                ret = av_seek_frame(s, stream_index, ts, flags | (dir^AVSEEK_FLAG_BACKWARD));
-        }
-        return ret;
-    }
-
-    // try some generic seek like seek_frame_generic() but with new ts semantics
-    return -1; //unreachable
-}
-
-/** Flush the frame reader. */
-void ff_read_frame_flush(AVFormatContext *s)
-{
-    FFFormatContext *const si = ffformatcontext(s);
-
-    ff_flush_packet_queue(s);
-
-    /* Reset read state for each stream. */
-    for (unsigned i = 0; i < s->nb_streams; i++) {
-        AVStream *const st  = s->streams[i];
-        FFStream *const sti = ffstream(st);
-
-        if (sti->parser) {
-            av_parser_close(sti->parser);
-            sti->parser = NULL;
-        }
-        sti->last_IP_pts = AV_NOPTS_VALUE;
-        sti->last_dts_for_order_check = AV_NOPTS_VALUE;
-        if (sti->first_dts == AV_NOPTS_VALUE)
-            sti->cur_dts = RELATIVE_TS_BASE;
-        else
-            /* We set the current DTS to an unspecified origin. */
-            sti->cur_dts = AV_NOPTS_VALUE;
-
-        sti->probe_packets = s->max_probe_packets;
-
-        for (int j = 0; j < MAX_REORDER_DELAY + 1; j++)
-            sti->pts_buffer[j] = AV_NOPTS_VALUE;
-
-#if FF_API_AVSTREAM_SIDE_DATA
-        if (si->inject_global_side_data)
-            sti->inject_global_side_data = 1;
-#endif
-
-        sti->skip_samples = 0;
-    }
-}
-
-int avformat_flush(AVFormatContext *s)
-{
+    int i;
+    AVStream *st;
+    AVParserStreamState *ss;
     ff_read_frame_flush(s);
-    return 0;
+
+    if (!state)
+        return;
+
+    avio_seek(s->pb, state->fpos, SEEK_SET);
+
+    // copy context structures
+    s->packet_buffer                    = state->packet_buffer;
+    s->parse_queue                      = state->parse_queue;
+    s->raw_packet_buffer                = state->raw_packet_buffer;
+    s->raw_packet_buffer_remaining_size = state->raw_packet_buffer_remaining_size;
+
+    // copy stream structures
+    for (i = 0; i < state->nb_streams; i++) {
+        st = s->streams[i];
+        ss = &state->stream_states[i];
+
+        st->parser        = ss->parser;
+        st->last_IP_pts   = ss->last_IP_pts;
+        st->cur_dts       = ss->cur_dts;
+        st->reference_dts = ss->reference_dts;
+        st->probe_packets = ss->probe_packets;
+    }
+
+    av_free(state->stream_states);
+    av_free(state);
 }
 
-void ff_rescale_interval(AVRational tb_in, AVRational tb_out,
-                         int64_t *min_ts, int64_t *ts, int64_t *max_ts)
+static void free_packet_list(AVPacketList *pktl)
 {
-    *ts     = av_rescale_q    (*    ts, tb_in, tb_out);
-    *min_ts = av_rescale_q_rnd(*min_ts, tb_in, tb_out,
-                               AV_ROUND_UP   | AV_ROUND_PASS_MINMAX);
-    *max_ts = av_rescale_q_rnd(*max_ts, tb_in, tb_out,
-                               AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX);
+    AVPacketList *cur;
+    while (pktl) {
+        cur = pktl;
+        pktl = cur->next;
+        av_free_packet(&cur->pkt);
+        av_free(cur);
+    }
+}
+
+void ff_free_parser_state(AVFormatContext *s, AVParserState *state)
+{
+    int i;
+    AVParserStreamState *ss;
+
+    if (!state)
+        return;
+
+    for (i = 0; i < state->nb_streams; i++) {
+        ss = &state->stream_states[i];
+        if (ss->parser)
+            av_parser_close(ss->parser);
+    }
+
+    free_packet_list(state->packet_buffer);
+    free_packet_list(state->parse_queue);
+    free_packet_list(state->raw_packet_buffer);
+
+    av_free(state->stream_states);
+    av_free(state);
 }

@@ -25,11 +25,12 @@
  * As Alex Beregszaszi discovered, this is effectively RFB data dump
  */
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "libavutil/common.h"
-#include "libavutil/mem.h"
+#include "libavutil/intreadwrite.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "bytestream.h"
 
 enum EncTypes {
@@ -55,7 +56,7 @@ enum HexTile_Flags {
  */
 typedef struct VmncContext {
     AVCodecContext *avctx;
-    AVFrame *pic;
+    AVFrame pic;
 
     int bpp;
     int bpp2;
@@ -257,7 +258,7 @@ static int decode_hextile(VmncContext *c, uint8_t* dst, GetByteContext *gb,
         for (i = 0; i < w; i += 16, dst2 += 16 * bpp) {
             if (bytestream2_get_bytes_left(gb) <= 0) {
                 av_log(c->avctx, AV_LOG_ERROR, "Premature end of data!\n");
-                return AVERROR_INVALIDDATA;
+                return -1;
             }
             if (i + 16 > w)
                 bw = w - i;
@@ -265,7 +266,7 @@ static int decode_hextile(VmncContext *c, uint8_t* dst, GetByteContext *gb,
             if (flags & HT_RAW) {
                 if (bytestream2_get_bytes_left(gb) < bw * bh * bpp) {
                     av_log(c->avctx, AV_LOG_ERROR, "Premature end of data!\n");
-                    return AVERROR_INVALIDDATA;
+                    return -1;
                 }
                 paint_raw(dst2, bw, bh, gb, bpp, c->bigendian, stride);
             } else {
@@ -282,27 +283,20 @@ static int decode_hextile(VmncContext *c, uint8_t* dst, GetByteContext *gb,
 
                 if (bytestream2_get_bytes_left(gb) < rects * (color * bpp + 2)) {
                     av_log(c->avctx, AV_LOG_ERROR, "Premature end of data!\n");
-                    return AVERROR_INVALIDDATA;
+                    return -1;
                 }
                 for (k = 0; k < rects; k++) {
-                    int rect_x, rect_y, rect_w, rect_h;
                     if (color)
                         fg = vmnc_get_pixel(gb, bpp, c->bigendian);
                     xy = bytestream2_get_byte(gb);
                     wh = bytestream2_get_byte(gb);
-
-                    rect_x = xy >> 4;
-                    rect_y = xy & 0xF;
-                    rect_w = (wh >> 4) + 1;
-                    rect_h = (wh & 0xF) + 1;
-
-                    if (rect_x + rect_w > w - i || rect_y + rect_h > h - j) {
+                    if (   (xy >> 4) + (wh >> 4) + 1 > w - i
+                        || (xy & 0xF) + (wh & 0xF)+1 > h - j) {
                         av_log(c->avctx, AV_LOG_ERROR, "Rectangle outside picture\n");
                         return AVERROR_INVALIDDATA;
                     }
-
-                    paint_rect(dst2, rect_x, rect_y,
-                               rect_w, rect_h, fg, bpp, stride);
+                    paint_rect(dst2, xy >> 4, xy & 0xF,
+                               (wh>>4)+1, (wh & 0xF)+1, fg, bpp, stride);
                 }
             }
         }
@@ -317,31 +311,29 @@ static void reset_buffers(VmncContext *c)
     av_freep(&c->curmask);
     av_freep(&c->screendta);
     c->cur_w = c->cur_h = 0;
-    c->cur_hx = c->cur_hy = 0;
-
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                        AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     VmncContext * const c = avctx->priv_data;
     GetByteContext *gb = &c->gb;
     uint8_t *outptr;
-    int dx, dy, w, h, depth, enc, chunks, res, size_left, ret;
+    int dx, dy, w, h, depth, enc, chunks, res, size_left;
+
+    c->pic.reference = 3;
+    c->pic.buffer_hints = FF_BUFFER_HINTS_VALID | FF_BUFFER_HINTS_PRESERVE | FF_BUFFER_HINTS_REUSABLE;
+    if(avctx->reget_buffer(avctx, &c->pic) < 0){
+        av_log(avctx, AV_LOG_ERROR, "reget_buffer() failed\n");
+        return -1;
+    }
 
     bytestream2_init(gb, buf, buf_size);
-    bytestream2_skip(gb, 2);
-    chunks = bytestream2_get_be16(gb);
-    if (12LL * chunks > bytestream2_get_bytes_left(gb))
-        return AVERROR_INVALIDDATA;
 
-    if ((ret = ff_reget_buffer(avctx, c->pic, 0)) < 0)
-        return ret;
-
-    c->pic->flags &= ~AV_FRAME_FLAG_KEY;
-    c->pic->pict_type = AV_PICTURE_TYPE_P;
+    c->pic.key_frame = 0;
+    c->pic.pict_type = AV_PICTURE_TYPE_P;
 
     // restore screen after cursor
     if (c->screendta) {
@@ -363,15 +355,16 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
             dy = 0;
         }
         if ((w > 0) && (h > 0)) {
-            outptr = c->pic->data[0] + dx * c->bpp2 + dy * c->pic->linesize[0];
+            outptr = c->pic.data[0] + dx * c->bpp2 + dy * c->pic.linesize[0];
             for (i = 0; i < h; i++) {
                 memcpy(outptr, c->screendta + i * c->cur_w * c->bpp2,
                        w * c->bpp2);
-                outptr += c->pic->linesize[0];
+                outptr += c->pic.linesize[0];
             }
         }
     }
-
+    bytestream2_skip(gb, 2);
+    chunks = bytestream2_get_be16(gb);
     while (chunks--) {
         if (bytestream2_get_bytes_left(gb) < 12) {
             av_log(avctx, AV_LOG_ERROR, "Premature end of data!\n");
@@ -382,13 +375,7 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
         w   = bytestream2_get_be16(gb);
         h   = bytestream2_get_be16(gb);
         enc = bytestream2_get_be32(gb);
-        if ((dx + w > c->width) || (dy + h > c->height)) {
-            av_log(avctx, AV_LOG_ERROR,
-                    "Incorrect frame size: %ix%i+%ix%i of %ix%i\n",
-                    w, h, dx, dy, c->width, c->height);
-            return AVERROR_INVALIDDATA;
-        }
-        outptr = c->pic->data[0] + dx * c->bpp2 + dy * c->pic->linesize[0];
+        outptr = c->pic.data[0] + dx * c->bpp2 + dy * c->pic.linesize[0];
         size_left = bytestream2_get_bytes_left(gb);
         switch (enc) {
         case MAGIC_WMVd: // cursor
@@ -396,11 +383,11 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
                 av_log(avctx, AV_LOG_ERROR, "dimensions too large\n");
                 return AVERROR_INVALIDDATA;
             }
-            if (size_left < 2 + w * h * c->bpp2 * 2) {
+            if(size_left < 2 + w * h * c->bpp2 * 2) {
                 av_log(avctx, AV_LOG_ERROR,
                        "Premature end of data! (need %i got %i)\n",
                        2 + w * h * c->bpp2 * 2, size_left);
-                return AVERROR_INVALIDDATA;
+                return -1;
             }
             bytestream2_skip(gb, 2);
             c->cur_w  = w;
@@ -419,11 +406,11 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
                 return AVERROR(EINVAL);
             } else {
                 int screen_size = c->cur_w * c->cur_h * c->bpp2;
-                if ((ret = av_reallocp(&c->curbits, screen_size)) < 0 ||
-                    (ret = av_reallocp(&c->curmask, screen_size)) < 0 ||
-                    (ret = av_reallocp(&c->screendta, screen_size)) < 0) {
+                if ((c->curbits = av_realloc(c->curbits, screen_size)) == NULL ||
+                    (c->curmask = av_realloc(c->curmask, screen_size)) == NULL ||
+                    (c->screendta = av_realloc(c->screendta, screen_size)) == NULL) {
                     reset_buffers(c);
-                    return ret;
+                    return screen_size ? AVERROR(ENOMEM) : 0;
                 }
             }
             load_cursor(c);
@@ -442,8 +429,8 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
             bytestream2_skip(gb, 4);
             break;
         case MAGIC_WMVi: // ServerInitialization struct
-            c->pic->flags |= AV_FRAME_FLAG_KEY;
-            c->pic->pict_type = AV_PICTURE_TYPE_I;
+            c->pic.key_frame = 1;
+            c->pic.pict_type = AV_PICTURE_TYPE_I;
             depth = bytestream2_get_byte(gb);
             if (depth != c->bpp) {
                 av_log(avctx, AV_LOG_INFO,
@@ -456,7 +443,7 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
             if (c->bigendian & (~1)) {
                 av_log(avctx, AV_LOG_INFO,
                        "Invalid header: bigendian flag = %i\n", c->bigendian);
-                return AVERROR_INVALIDDATA;
+                return -1;
             }
             //skip the rest of pixel format data
             bytestream2_skip(gb, 13);
@@ -465,19 +452,31 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
             bytestream2_skip(gb, 2);
             break;
         case 0x00000000: // raw rectangle data
+            if ((dx + w > c->width) || (dy + h > c->height)) {
+                av_log(avctx, AV_LOG_ERROR,
+                       "Incorrect frame size: %ix%i+%ix%i of %ix%i\n",
+                       w, h, dx, dy, c->width, c->height);
+                return -1;
+            }
             if (size_left < w * h * c->bpp2) {
                 av_log(avctx, AV_LOG_ERROR,
                        "Premature end of data! (need %i got %i)\n",
                        w * h * c->bpp2, size_left);
-                return AVERROR_INVALIDDATA;
+                return -1;
             }
             paint_raw(outptr, w, h, gb, c->bpp2, c->bigendian,
-                      c->pic->linesize[0]);
+                      c->pic.linesize[0]);
             break;
         case 0x00000005: // HexTile encoded rectangle
-            res = decode_hextile(c, outptr, gb, w, h, c->pic->linesize[0]);
+            if ((dx + w > c->width) || (dy + h > c->height)) {
+                av_log(avctx, AV_LOG_ERROR,
+                       "Incorrect frame size: %ix%i+%ix%i of %ix%i\n",
+                       w, h, dx, dy, c->width, c->height);
+                return -1;
+            }
+            res = decode_hextile(c, outptr, gb, w, h, c->pic.linesize[0]);
             if (res < 0)
-                return res;
+                return -1;
             break;
         default:
             av_log(avctx, AV_LOG_ERROR, "Unsupported block type 0x%08X\n", enc);
@@ -504,19 +503,18 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
             dy = 0;
         }
         if ((w > 0) && (h > 0)) {
-            outptr = c->pic->data[0] + dx * c->bpp2 + dy * c->pic->linesize[0];
+            outptr = c->pic.data[0] + dx * c->bpp2 + dy * c->pic.linesize[0];
             for (i = 0; i < h; i++) {
                 memcpy(c->screendta + i * c->cur_w * c->bpp2, outptr,
                        w * c->bpp2);
-                outptr += c->pic->linesize[0];
+                outptr += c->pic.linesize[0];
             }
-            outptr = c->pic->data[0];
-            put_cursor(outptr, c->pic->linesize[0], c, c->cur_x, c->cur_y);
+            outptr = c->pic.data[0];
+            put_cursor(outptr, c->pic.linesize[0], c, c->cur_x, c->cur_y);
         }
     }
     *got_frame = 1;
-    if ((ret = av_frame_ref(rframe, c->pic)) < 0)
-        return ret;
+    *(AVFrame*)data = c->pic;
 
     /* always report that the buffer was completely consumed */
     return buf_size;
@@ -530,6 +528,9 @@ static av_cold int decode_init(AVCodecContext *avctx)
     c->width  = avctx->width;
     c->height = avctx->height;
     c->bpp    = avctx->bits_per_coded_sample;
+    c->bpp2   = c->bpp / 8;
+
+    avcodec_get_frame_defaults(&c->pic);
 
     switch (c->bpp) {
     case 8:
@@ -538,22 +539,13 @@ static av_cold int decode_init(AVCodecContext *avctx)
     case 16:
         avctx->pix_fmt = AV_PIX_FMT_RGB555;
         break;
-    case 24:
-        /* 24 bits is not technically supported, but some clients might
-         * mistakenly set it, so let's assume they actually meant 32 bits */
-        c->bpp = 32;
     case 32:
-        avctx->pix_fmt = AV_PIX_FMT_0RGB32;
+        avctx->pix_fmt = AV_PIX_FMT_RGB32;
         break;
     default:
         av_log(avctx, AV_LOG_ERROR, "Unsupported bitdepth %i\n", c->bpp);
         return AVERROR_INVALIDDATA;
     }
-    c->bpp2 = c->bpp / 8;
-
-    c->pic = av_frame_alloc();
-    if (!c->pic)
-        return AVERROR(ENOMEM);
 
     return 0;
 }
@@ -562,22 +554,23 @@ static av_cold int decode_end(AVCodecContext *avctx)
 {
     VmncContext * const c = avctx->priv_data;
 
-    av_frame_free(&c->pic);
+    if (c->pic.data[0])
+        avctx->release_buffer(avctx, &c->pic);
 
-    av_freep(&c->curbits);
-    av_freep(&c->curmask);
-    av_freep(&c->screendta);
+    av_free(c->curbits);
+    av_free(c->curmask);
+    av_free(c->screendta);
     return 0;
 }
 
-const FFCodec ff_vmnc_decoder = {
-    .p.name         = "vmnc",
-    CODEC_LONG_NAME("VMware Screen Codec / VMware Video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_VMNC,
+AVCodec ff_vmnc_decoder = {
+    .name           = "vmnc",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_VMNC,
     .priv_data_size = sizeof(VmncContext),
     .init           = decode_init,
     .close          = decode_end,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("VMware Screen Codec / VMware Video"),
 };

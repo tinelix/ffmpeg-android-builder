@@ -26,7 +26,6 @@
 
 #include "avcodec.h"
 #include "ass.h"
-#include "codec_internal.h"
 #include "libavutil/bprint.h"
 
 static int subviewer_event_to_ass(AVBPrint *buf, const char *p)
@@ -44,34 +43,41 @@ static int subviewer_event_to_ass(AVBPrint *buf, const char *p)
         }
     }
 
+    av_bprintf(buf, "\r\n");
     return 0;
 }
 
-static int subviewer_decode_frame(AVCodecContext *avctx, AVSubtitle *sub,
-                                  int *got_sub_ptr, const AVPacket *avpkt)
+static int subviewer_decode_frame(AVCodecContext *avctx,
+                                  void *data, int *got_sub_ptr, AVPacket *avpkt)
 {
-    int ret = 0;
+    char c;
+    AVSubtitle *sub = data;
     const char *ptr = avpkt->data;
-    FFASSDecoderContext *s = avctx->priv_data;
     AVBPrint buf;
 
+    /* To be removed later */
+    if (ptr && sscanf(ptr, "%*u:%*u:%*u.%*u,%*u:%*u:%*u.%*u%c", &c) == 1) {
+        av_log(avctx, AV_LOG_ERROR, "AVPacket is not clean (contains timing "
+               "information). You need to upgrade your libavformat or "
+               "sanitize your packet.\n");
+        return AVERROR_INVALIDDATA;
+    }
+
     av_bprint_init(&buf, 0, AV_BPRINT_SIZE_UNLIMITED);
+    // note: no need to rescale pts & duration since they are in the same
+    // timebase as ASS (1/100)
     if (ptr && avpkt->size > 0 && !subviewer_event_to_ass(&buf, ptr))
-        ret = ff_ass_add_rect(sub, buf.str, s->readorder++, 0, NULL, NULL);
-    av_bprint_finalize(&buf, NULL);
-    if (ret < 0)
-        return ret;
+        ff_ass_add_rect(sub, buf.str, avpkt->pts, avpkt->duration, 0);
     *got_sub_ptr = sub->num_rects > 0;
+    av_bprint_finalize(&buf, NULL);
     return avpkt->size;
 }
 
-const FFCodec ff_subviewer_decoder = {
-    .p.name         = "subviewer",
-    CODEC_LONG_NAME("SubViewer subtitle"),
-    .p.type         = AVMEDIA_TYPE_SUBTITLE,
-    .p.id           = AV_CODEC_ID_SUBVIEWER,
-    FF_CODEC_DECODE_SUB_CB(subviewer_decode_frame),
+AVCodec ff_subviewer_decoder = {
+    .name           = "subviewer",
+    .long_name      = NULL_IF_CONFIG_SMALL("SubViewer subtitle"),
+    .type           = AVMEDIA_TYPE_SUBTITLE,
+    .id             = AV_CODEC_ID_SUBVIEWER,
+    .decode         = subviewer_decode_frame,
     .init           = ff_ass_subtitle_header_default,
-    .flush          = ff_ass_decoder_flush,
-    .priv_data_size = sizeof(FFASSDecoderContext),
 };

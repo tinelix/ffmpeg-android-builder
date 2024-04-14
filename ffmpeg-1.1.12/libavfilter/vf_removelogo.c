@@ -70,18 +70,15 @@
  */
 
 #include "libavutil/imgutils.h"
-#include "libavutil/mem.h"
-#include "libavutil/opt.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 #include "video.h"
 #include "bbox.h"
 #include "lavfutils.h"
 #include "lswsutils.h"
 
-typedef struct RemovelogoContext {
-    const AVClass *class;
-    char *filename;
+typedef struct {
     /* Stores our collection of masks. The first is for an array of
        the second for the y axis, and the third for the x axis. */
     int ***mask;
@@ -94,16 +91,6 @@ typedef struct RemovelogoContext {
     FFBoundingBox half_mask_bbox;
 } RemovelogoContext;
 
-#define OFFSET(x) offsetof(RemovelogoContext, x)
-#define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption removelogo_options[] = {
-    { "filename", "set bitmap filename", OFFSET(filename), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
-    { "f",        "set bitmap filename", OFFSET(filename), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
-    { NULL }
-};
-
-AVFILTER_DEFINE_CLASS(removelogo);
-
 /**
  * Choose a slightly larger mask size to improve performance.
  *
@@ -114,7 +101,7 @@ AVFILTER_DEFINE_CLASS(removelogo);
  * opinion. This will calculate only at init-time, so you can put a
  * long expression here without effecting performance.
  */
-#define apply_mask_fudge_factor(x) (((x) >> 2) + (x))
+#define apply_mask_fudge_factor(x) (((x) >> 2) + x)
 
 /**
  * Pre-process an image to give distance information.
@@ -154,7 +141,7 @@ static void convert_mask_to_strength_mask(uint8_t *data, int linesize,
     while (1) {
         /* If this doesn't get set by the end of this pass, then we're done. */
         int has_anything_changed = 0;
-        uint8_t *current_pixel0 = data + 1 + linesize, *current_pixel;
+        uint8_t *current_pixel0 = data, *current_pixel;
         current_pass++;
 
         for (y = 1; y < h-1; y++) {
@@ -174,8 +161,8 @@ static void convert_mask_to_strength_mask(uint8_t *data, int linesize,
                 if ( *current_pixel      >= current_pass &&
                     *(current_pixel + 1) >= current_pass &&
                     *(current_pixel - 1) >= current_pass &&
-                    *(current_pixel + linesize) >= current_pass &&
-                    *(current_pixel - linesize) >= current_pass) {
+                    *(current_pixel + w) >= current_pass &&
+                    *(current_pixel - w) >= current_pass) {
                     /* Increment the value since it still has not been
                      * eroded, as evidenced by the if statement that
                      * just evaluated to true. */
@@ -203,6 +190,13 @@ static void convert_mask_to_strength_mask(uint8_t *data, int linesize,
     *max_mask_size = apply_mask_fudge_factor(current_pass + 1);
 }
 
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE };
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+    return 0;
+}
+
 static int load_mask(uint8_t **mask, int *w, int *h,
                      const char *filename, void *log_ctx)
 {
@@ -228,8 +222,8 @@ static int load_mask(uint8_t **mask, int *w, int *h,
     av_image_copy_plane(*mask, *w, gray_data[0], gray_linesize[0], *w, *h);
 
 end:
-    av_freep(&src_data[0]);
-    av_freep(&gray_data[0]);
+    av_free(src_data[0]);
+    av_free(gray_data[0]);
     return ret;
 }
 
@@ -270,57 +264,53 @@ static void generate_half_size_image(const uint8_t *src_data, int src_linesize,
                                   src_w/2, src_h/2, 0, max_mask_size);
 }
 
-static av_cold int init(AVFilterContext *ctx)
+static av_cold int init(AVFilterContext *ctx, const char *args)
 {
-    RemovelogoContext *s = ctx->priv;
+    RemovelogoContext *removelogo = ctx->priv;
     int ***mask;
     int ret = 0;
     int a, b, c, w, h;
     int full_max_mask_size, half_max_mask_size;
 
-    if (!s->filename) {
-        av_log(ctx, AV_LOG_ERROR, "The bitmap file name is mandatory\n");
+    if (!args) {
+        av_log(ctx, AV_LOG_ERROR, "An image file must be specified as argument\n");
         return AVERROR(EINVAL);
     }
 
     /* Load our mask image. */
-    if ((ret = load_mask(&s->full_mask_data, &w, &h, s->filename, ctx)) < 0)
+    if ((ret = load_mask(&removelogo->full_mask_data, &w, &h, args, ctx)) < 0)
         return ret;
-    s->mask_w = w;
-    s->mask_h = h;
+    removelogo->mask_w = w;
+    removelogo->mask_h = h;
 
-    convert_mask_to_strength_mask(s->full_mask_data, w, w, h,
+    convert_mask_to_strength_mask(removelogo->full_mask_data, w, w, h,
                                   16, &full_max_mask_size);
 
     /* Create the scaled down mask image for the chroma planes. */
-    if (!(s->half_mask_data = av_mallocz(w/2 * h/2)))
+    if (!(removelogo->half_mask_data = av_mallocz(w/2 * h/2)))
         return AVERROR(ENOMEM);
-    generate_half_size_image(s->full_mask_data, w,
-                             s->half_mask_data, w/2,
+    generate_half_size_image(removelogo->full_mask_data, w,
+                             removelogo->half_mask_data, w/2,
                              w, h, &half_max_mask_size);
 
-    s->max_mask_size = FFMAX(full_max_mask_size, half_max_mask_size);
+    removelogo->max_mask_size = FFMAX(full_max_mask_size, half_max_mask_size);
 
     /* Create a circular mask for each size up to max_mask_size. When
        the filter is applied, the mask size is determined on a pixel
        by pixel basis, with pixels nearer the edge of the logo getting
        smaller mask sizes. */
-    mask = (int ***)av_malloc_array(s->max_mask_size + 1, sizeof(int **));
+    mask = (int ***)av_malloc(sizeof(int **) * (removelogo->max_mask_size + 1));
     if (!mask)
         return AVERROR(ENOMEM);
 
-    for (a = 0; a <= s->max_mask_size; a++) {
-        mask[a] = (int **)av_malloc_array((a * 2) + 1, sizeof(int *));
-        if (!mask[a]) {
-            av_free(mask);
+    for (a = 0; a <= removelogo->max_mask_size; a++) {
+        mask[a] = (int **)av_malloc(sizeof(int *) * ((a * 2) + 1));
+        if (!mask[a])
             return AVERROR(ENOMEM);
-        }
         for (b = -a; b <= a; b++) {
-            mask[a][b + a] = (int *)av_malloc_array((a * 2) + 1, sizeof(int));
-            if (!mask[a][b + a]) {
-                av_free(mask);
+            mask[a][b + a] = (int *)av_malloc(sizeof(int) * ((a * 2) + 1));
+            if (!mask[a][b + a])
                 return AVERROR(ENOMEM);
-            }
             for (c = -a; c <= a; c++) {
                 if ((b * b) + (c * c) <= (a * a)) /* Circular 0/1 mask. */
                     mask[a][b + a][c + a] = 1;
@@ -329,17 +319,17 @@ static av_cold int init(AVFilterContext *ctx)
             }
         }
     }
-    s->mask = mask;
+    removelogo->mask = mask;
 
     /* Calculate our bounding rectangles, which determine in what
      * region the logo resides for faster processing. */
-    ff_calculate_bounding_box(&s->full_mask_bbox, s->full_mask_data, w, w, h, 0, 8);
-    ff_calculate_bounding_box(&s->half_mask_bbox, s->half_mask_data, w/2, w/2, h/2, 0, 8);
+    ff_calculate_bounding_box(&removelogo->full_mask_bbox, removelogo->full_mask_data, w, w, h, 0);
+    ff_calculate_bounding_box(&removelogo->half_mask_bbox, removelogo->half_mask_data, w/2, w/2, h/2, 0);
 
 #define SHOW_LOGO_INFO(mask_type)                                       \
     av_log(ctx, AV_LOG_VERBOSE, #mask_type " x1:%d x2:%d y1:%d y2:%d max_mask_size:%d\n", \
-           s->mask_type##_mask_bbox.x1, s->mask_type##_mask_bbox.x2, \
-           s->mask_type##_mask_bbox.y1, s->mask_type##_mask_bbox.y2, \
+           removelogo->mask_type##_mask_bbox.x1, removelogo->mask_type##_mask_bbox.x2, \
+           removelogo->mask_type##_mask_bbox.y1, removelogo->mask_type##_mask_bbox.y2, \
            mask_type##_max_mask_size);
     SHOW_LOGO_INFO(full);
     SHOW_LOGO_INFO(half);
@@ -350,12 +340,12 @@ static av_cold int init(AVFilterContext *ctx)
 static int config_props_input(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    RemovelogoContext *s = ctx->priv;
+    RemovelogoContext *removelogo = ctx->priv;
 
-    if (inlink->w != s->mask_w || inlink->h != s->mask_h) {
+    if (inlink->w != removelogo->mask_w || inlink->h != removelogo->mask_h) {
         av_log(ctx, AV_LOG_INFO,
                "Mask image size %dx%d does not match with the input video size %dx%d\n",
-               s->mask_w, s->mask_h, inlink->w, inlink->h);
+               removelogo->mask_w, removelogo->mask_h, inlink->w, inlink->h);
         return AVERROR(EINVAL);
     }
 
@@ -483,87 +473,96 @@ static void blur_image(int ***mask,
     }
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *inpicref)
+static int filter_frame(AVFilterLink *inlink, AVFilterBufferRef *inpicref)
 {
-    RemovelogoContext *s = inlink->dst->priv;
+    RemovelogoContext *removelogo = inlink->dst->priv;
     AVFilterLink *outlink = inlink->dst->outputs[0];
-    AVFrame *outpicref;
+    AVFilterBufferRef *outpicref;
     int direct = 0;
 
-    if (av_frame_is_writable(inpicref)) {
+    if (inpicref->perms & AV_PERM_WRITE) {
         direct = 1;
         outpicref = inpicref;
     } else {
-        outpicref = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+        outpicref = ff_get_video_buffer(outlink, AV_PERM_WRITE, outlink->w, outlink->h);
         if (!outpicref) {
-            av_frame_free(&inpicref);
+            avfilter_unref_bufferp(&inpicref);
             return AVERROR(ENOMEM);
         }
-        av_frame_copy_props(outpicref, inpicref);
+        avfilter_copy_buffer_ref_props(outpicref, inpicref);
     }
 
-    blur_image(s->mask,
+    blur_image(removelogo->mask,
                inpicref ->data[0], inpicref ->linesize[0],
                outpicref->data[0], outpicref->linesize[0],
-               s->full_mask_data, inlink->w,
-               inlink->w, inlink->h, direct, &s->full_mask_bbox);
-    blur_image(s->mask,
+               removelogo->full_mask_data, inlink->w,
+               inlink->w, inlink->h, direct, &removelogo->full_mask_bbox);
+    blur_image(removelogo->mask,
                inpicref ->data[1], inpicref ->linesize[1],
                outpicref->data[1], outpicref->linesize[1],
-               s->half_mask_data, inlink->w/2,
-               inlink->w/2, inlink->h/2, direct, &s->half_mask_bbox);
-    blur_image(s->mask,
+               removelogo->half_mask_data, inlink->w/2,
+               inlink->w/2, inlink->h/2, direct, &removelogo->half_mask_bbox);
+    blur_image(removelogo->mask,
                inpicref ->data[2], inpicref ->linesize[2],
                outpicref->data[2], outpicref->linesize[2],
-               s->half_mask_data, inlink->w/2,
-               inlink->w/2, inlink->h/2, direct, &s->half_mask_bbox);
+               removelogo->half_mask_data, inlink->w/2,
+               inlink->w/2, inlink->h/2, direct, &removelogo->half_mask_bbox);
 
     if (!direct)
-        av_frame_free(&inpicref);
+        avfilter_unref_bufferp(&inpicref);
 
     return ff_filter_frame(outlink, outpicref);
 }
 
-static av_cold void uninit(AVFilterContext *ctx)
+static void uninit(AVFilterContext *ctx)
 {
-    RemovelogoContext *s = ctx->priv;
+    RemovelogoContext *removelogo = ctx->priv;
     int a, b;
 
-    av_freep(&s->full_mask_data);
-    av_freep(&s->half_mask_data);
+    av_freep(&removelogo->full_mask_data);
+    av_freep(&removelogo->half_mask_data);
 
-    if (s->mask) {
+    if (removelogo->mask) {
         /* Loop through each mask. */
-        for (a = 0; a <= s->max_mask_size; a++) {
+        for (a = 0; a <= removelogo->max_mask_size; a++) {
             /* Loop through each scanline in a mask. */
             for (b = -a; b <= a; b++) {
-                av_freep(&s->mask[a][b + a]); /* Free a scanline. */
+                av_free(removelogo->mask[a][b + a]); /* Free a scanline. */
             }
-            av_freep(&s->mask[a]);
+            av_free(removelogo->mask[a]);
         }
         /* Free the array of pointers pointing to the masks. */
-        av_freep(&s->mask);
+        av_freep(&removelogo->mask);
     }
 }
 
 static const AVFilterPad removelogo_inputs[] = {
     {
-        .name         = "default",
-        .type         = AVMEDIA_TYPE_VIDEO,
-        .config_props = config_props_input,
-        .filter_frame = filter_frame,
+        .name             = "default",
+        .type             = AVMEDIA_TYPE_VIDEO,
+        .get_video_buffer = ff_null_get_video_buffer,
+        .config_props     = config_props_input,
+        .filter_frame     = filter_frame,
+        .min_perms        = AV_PERM_READ,
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_removelogo = {
+static const AVFilterPad removelogo_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter avfilter_vf_removelogo = {
     .name          = "removelogo",
     .description   = NULL_IF_CONFIG_SMALL("Remove a TV logo based on a mask image."),
     .priv_size     = sizeof(RemovelogoContext),
     .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(removelogo_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_YUV420P),
-    .priv_class    = &removelogo_class,
-    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
+    .query_formats = query_formats,
+    .inputs        = removelogo_inputs,
+    .outputs       = removelogo_outputs,
 };

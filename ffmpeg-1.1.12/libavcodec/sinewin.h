@@ -22,7 +22,7 @@
 #define AVCODEC_SINEWIN_H
 
 #include "config.h"
-#include "libavutil/mem_internal.h"
+#include "libavutil/mem.h"
 
 #if CONFIG_HARDCODED_TABLES
 #   define SINETABLE_CONST const
@@ -55,6 +55,6 @@ extern SINETABLE(2048);
 extern SINETABLE(4096);
 extern SINETABLE(8192);
 
-extern SINETABLE_CONST float *const ff_sine_windows[];
+extern SINETABLE_CONST float * const ff_sine_windows[14];
 
 #endif /* AVCODEC_SINEWIN_H */

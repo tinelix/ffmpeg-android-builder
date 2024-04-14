@@ -28,25 +28,40 @@
 
 #include <stdint.h>
 
-#include "avcodec.h"
-#include "bswapdsp.h"
+#include "libavutil/attributes.h"
+#include "libavutil/mem.h"
 
-typedef struct ASVCommonContext {
+#include "avcodec.h"
+#include "dsputil.h"
+#include "get_bits.h"
+#include "put_bits.h"
+
+typedef struct ASV1Context{
     AVCodecContext *avctx;
-    BswapDSPContext bbdsp;
+    DSPContext dsp;
+    AVFrame picture;
+    PutBitContext pb;
+    GetBitContext gb;
+    ScanTable scantable;
+    int inv_qscale;
     int mb_width;
     int mb_height;
     int mb_width2;
     int mb_height2;
-} ASVCommonContext;
+    DECLARE_ALIGNED(16, DCTELEM, block)[6][64];
+    uint16_t intra_matrix[64];
+    int q_intra_matrix[64];
+    uint8_t *bitstream_buffer;
+    unsigned int bitstream_buffer_size;
+} ASV1Context;
 
 extern const uint8_t ff_asv_scantab[64];
 extern const uint8_t ff_asv_ccp_tab[17][2];
 extern const uint8_t ff_asv_level_tab[7][2];
 extern const uint8_t ff_asv_dc_ccp_tab[8][2];
 extern const uint8_t ff_asv_ac_ccp_tab[16][2];
-extern const uint16_t ff_asv2_level_tab[63][2];
+extern const uint8_t ff_asv2_level_tab[63][2];
 
-void ff_asv_common_init(AVCodecContext *avctx);
+av_cold void ff_asv_common_init(AVCodecContext *avctx);
 
 #endif /* AVCODEC_ASV_H */

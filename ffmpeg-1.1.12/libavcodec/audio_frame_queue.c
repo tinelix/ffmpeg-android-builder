@@ -19,17 +19,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/attributes.h"
-#include "libavutil/mem.h"
+#include "libavutil/common.h"
 #include "audio_frame_queue.h"
-#include "encode.h"
+#include "internal.h"
 #include "libavutil/avassert.h"
 
-av_cold void ff_af_queue_init(AVCodecContext *avctx, AudioFrameQueue *afq)
+void ff_af_queue_init(AVCodecContext *avctx, AudioFrameQueue *afq)
 {
     afq->avctx = avctx;
-    afq->remaining_delay   = avctx->initial_padding;
-    afq->remaining_samples = avctx->initial_padding;
+    afq->remaining_delay   = avctx->delay;
+    afq->remaining_samples = avctx->delay;
     afq->frame_count       = 0;
 }
 
@@ -58,7 +57,7 @@ int ff_af_queue_add(AudioFrameQueue *afq, const AVFrame *f)
                                       (AVRational){ 1, afq->avctx->sample_rate });
         new->pts -= afq->remaining_delay;
         if(afq->frame_count && new[-1].pts >= new->pts)
-            av_log(afq->avctx, AV_LOG_WARNING, "Queue input is backward in time\n");
+            av_log(afq->avctx, AV_LOG_WARNING, "Que input is backward in time\n");
     } else {
         new->pts = AV_NOPTS_VALUE;
     }
@@ -73,7 +72,7 @@ int ff_af_queue_add(AudioFrameQueue *afq, const AVFrame *f)
 }
 
 void ff_af_queue_remove(AudioFrameQueue *afq, int nb_samples, int64_t *pts,
-                        int64_t *duration)
+                        int *duration)
 {
     int64_t out_pts = AV_NOPTS_VALUE;
     int removed_samples = 0;

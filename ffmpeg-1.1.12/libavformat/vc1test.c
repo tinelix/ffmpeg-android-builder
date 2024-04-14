@@ -28,54 +28,46 @@
 
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define VC1_EXTRADATA_SIZE 4
 
-static int vc1t_probe(const AVProbeData *p)
+static int vc1t_probe(AVProbeData *p)
 {
-    uint32_t size;
-
     if (p->buf_size < 24)
         return 0;
-
-    size = AV_RL32(&p->buf[4]);
-    if (p->buf[3] != 0xC5 || size < 4 || size > p->buf_size - 20 ||
-        AV_RL32(&p->buf[size+16]) != 0xC)
+    if (p->buf[3] != 0xC5 || AV_RL32(&p->buf[4]) != 4 || AV_RL32(&p->buf[20]) != 0xC)
         return 0;
 
-    return AVPROBE_SCORE_EXTENSION;
+    return AVPROBE_SCORE_MAX/2;
 }
 
 static int vc1t_read_header(AVFormatContext *s)
 {
     AVIOContext *pb = s->pb;
     AVStream *st;
-    int frames, ret;
+    int frames;
     uint32_t fps;
-    uint32_t size;
 
     frames = avio_rl24(pb);
-    if (avio_r8(pb) != 0xC5 || ((size = avio_rl32(pb)) < 4))
-        return AVERROR_INVALIDDATA;
+    if(avio_r8(pb) != 0xC5 || avio_rl32(pb) != 4)
+        return -1;
 
     /* init video codec */
     st = avformat_new_stream(s, NULL);
     if (!st)
-        return AVERROR(ENOMEM);
+        return -1;
 
-    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-    st->codecpar->codec_id = AV_CODEC_ID_WMV3;
+    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codec->codec_id = AV_CODEC_ID_WMV3;
 
-    if ((ret = ff_get_extradata(s, st->codecpar, pb, VC1_EXTRADATA_SIZE)) < 0)
-        return ret;
-
-    avio_skip(pb, size - 4);
-    st->codecpar->height = avio_rl32(pb);
-    st->codecpar->width = avio_rl32(pb);
+    st->codec->extradata = av_malloc(VC1_EXTRADATA_SIZE);
+    st->codec->extradata_size = VC1_EXTRADATA_SIZE;
+    avio_read(pb, st->codec->extradata, VC1_EXTRADATA_SIZE);
+    st->codec->height = avio_rl32(pb);
+    st->codec->width = avio_rl32(pb);
     if(avio_rl32(pb) != 0xC)
-        return AVERROR_INVALIDDATA;
+        return -1;
     avio_skip(pb, 8);
     fps = avio_rl32(pb);
     if(fps == 0xFFFFFFFF)
@@ -100,8 +92,8 @@ static int vc1t_read_packet(AVFormatContext *s,
     int keyframe = 0;
     uint32_t pts;
 
-    if(avio_feof(pb))
-        return AVERROR_EOF;
+    if(url_feof(pb))
+        return AVERROR(EIO);
 
     frame_size = avio_rl24(pb);
     if(avio_r8(pb) & 0x80)
@@ -117,12 +109,11 @@ static int vc1t_read_packet(AVFormatContext *s,
     return pkt->size;
 }
 
-const FFInputFormat ff_vc1t_demuxer = {
-    .p.name         = "vc1test",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("VC-1 test bitstream"),
-    .p.extensions   = "rcv",
-    .p.flags        = AVFMT_GENERIC_INDEX,
+AVInputFormat ff_vc1t_demuxer = {
+    .name           = "vc1test",
+    .long_name      = NULL_IF_CONFIG_SMALL("VC-1 test bitstream"),
     .read_probe     = vc1t_probe,
     .read_header    = vc1t_read_header,
     .read_packet    = vc1t_read_packet,
+    .flags          = AVFMT_GENERIC_INDEX,
 };

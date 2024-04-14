@@ -18,13 +18,10 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-
-#include "libavutil/intreadwrite.h"
 #include "avformat.h"
-#include "avio_internal.h"
-#include "demux.h"
 #include "riff.h"
 #include "internal.h"
+#include "libavcodec/get_bits.h"
 
 #define CHUNK_SIZE 512
 #define RIFF_TAG MKTAG('R','I','F','F')
@@ -36,7 +33,7 @@ typedef struct{
     char second_packet;      ///< 1 - if temporary buffer contains valid (second) G.729 packet
 } ACTContext;
 
-static int probe(const AVProbeData *p)
+static int probe(AVProbeData *p)
 {
     int i;
 
@@ -45,7 +42,7 @@ static int probe(const AVProbeData *p)
         (AV_RL32(&p->buf[16]) != 16))
     return 0;
 
-    //We can't be sure that this is ACT and not regular WAV
+    //We cant be sure that this is ACT and not regular WAV
     if (p->buf_size<512)
         return 0;
 
@@ -69,7 +66,6 @@ static int read_header(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     int size;
     AVStream* st;
-    int ret;
 
     int min,sec,msec;
 
@@ -79,31 +75,29 @@ static int read_header(AVFormatContext *s)
 
     avio_skip(pb, 16);
     size=avio_rl32(pb);
-    ret = ff_get_wav_header(s, pb, st->codecpar, size, 0);
-    if (ret < 0)
-        return ret;
+    ff_get_wav_header(pb, st->codec, size);
 
     /*
       8000Hz (Fine-rec) file format has 10 bytes long
       packets with 10ms of sound data in them
     */
-    if (st->codecpar->sample_rate != 8000) {
-        av_log(s, AV_LOG_ERROR, "Sample rate %d is not supported.\n", st->codecpar->sample_rate);
+    if (st->codec->sample_rate != 8000) {
+        av_log(s, AV_LOG_ERROR, "Sample rate %d is not supported.\n", st->codec->sample_rate);
         return AVERROR_INVALIDDATA;
     }
 
-    st->codecpar->frame_size=80;
-    st->codecpar->ch_layout.nb_channels = 1;
+    st->codec->frame_size=80;
+    st->codec->channels=1;
     avpriv_set_pts_info(st, 64, 1, 100);
 
-    st->codecpar->codec_id=AV_CODEC_ID_G729;
+    st->codec->codec_id=AV_CODEC_ID_G729;
 
     avio_seek(pb, 257, SEEK_SET);
     msec=avio_rl16(pb);
     sec=avio_r8(pb);
     min=avio_rl32(pb);
 
-    st->duration = av_rescale(1000*(min*60+sec)+msec, st->codecpar->sample_rate, 1000 * st->codecpar->frame_size);
+    st->duration = av_rescale(1000*(min*60+sec)+msec, st->codec->sample_rate, 1000 * st->codec->frame_size);
 
     ctx->bytes_left_in_chunk=CHUNK_SIZE;
 
@@ -119,10 +113,10 @@ static int read_packet(AVFormatContext *s,
     ACTContext *ctx = s->priv_data;
     AVIOContext *pb = s->pb;
     int ret;
-    int frame_size=s->streams[0]->codecpar->sample_rate==8000?10:22;
+    int frame_size=s->streams[0]->codec->sample_rate==8000?10:22;
 
 
-    if(s->streams[0]->codecpar->sample_rate==8000)
+    if(s->streams[0]->codec->sample_rate==8000)
         ret=av_new_packet(pkt, 10);
     else
         ret=av_new_packet(pkt, 11);
@@ -130,12 +124,14 @@ static int read_packet(AVFormatContext *s,
     if(ret)
         return ret;
 
-    if(s->streams[0]->codecpar->sample_rate==4400 && !ctx->second_packet)
+    if(s->streams[0]->codec->sample_rate==4400 && !ctx->second_packet)
     {
-        ret = ffio_read_size(pb, ctx->audio_buffer, frame_size);
+        ret = avio_read(pb, ctx->audio_buffer, frame_size);
 
         if(ret<0)
             return ret;
+        if(ret!=frame_size)
+            return AVERROR(EIO);
 
         pkt->data[0]=ctx->audio_buffer[11];
         pkt->data[1]=ctx->audio_buffer[0];
@@ -151,7 +147,7 @@ static int read_packet(AVFormatContext *s,
 
         ctx->second_packet=1;
     }
-    else if(s->streams[0]->codecpar->sample_rate==4400 && ctx->second_packet)
+    else if(s->streams[0]->codec->sample_rate==4400 && ctx->second_packet)
     {
         pkt->data[0]=ctx->audio_buffer[5];
         pkt->data[1]=ctx->audio_buffer[17];
@@ -169,10 +165,12 @@ static int read_packet(AVFormatContext *s,
     }
     else // 8000 Hz
     {
-        ret = ffio_read_size(pb, ctx->audio_buffer, frame_size);
+        ret = avio_read(pb, ctx->audio_buffer, frame_size);
 
         if(ret<0)
             return ret;
+        if(ret!=frame_size)
+            return AVERROR(EIO);
 
         pkt->data[0]=ctx->audio_buffer[5];
         pkt->data[1]=ctx->audio_buffer[0];
@@ -199,9 +197,9 @@ static int read_packet(AVFormatContext *s,
     return ret;
 }
 
-const FFInputFormat ff_act_demuxer = {
-    .p.name         = "act",
-    .p.long_name    = "ACT Voice file format",
+AVInputFormat ff_act_demuxer = {
+    .name           = "act",
+    .long_name      = "ACT Voice file format",
     .priv_data_size = sizeof(ACTContext),
     .read_probe     = probe,
     .read_header    = read_header,

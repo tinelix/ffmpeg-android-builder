@@ -16,13 +16,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "error.h"
-#include "macros.h"
-#include "mem.h"
+#include "common.h"
 #include "samplefmt.h"
 
-#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct SampleFmtInfo {
@@ -37,13 +35,11 @@ static const SampleFmtInfo sample_fmt_info[AV_SAMPLE_FMT_NB] = {
     [AV_SAMPLE_FMT_U8]   = { .name =   "u8", .bits =  8, .planar = 0, .altform = AV_SAMPLE_FMT_U8P  },
     [AV_SAMPLE_FMT_S16]  = { .name =  "s16", .bits = 16, .planar = 0, .altform = AV_SAMPLE_FMT_S16P },
     [AV_SAMPLE_FMT_S32]  = { .name =  "s32", .bits = 32, .planar = 0, .altform = AV_SAMPLE_FMT_S32P },
-    [AV_SAMPLE_FMT_S64]  = { .name =  "s64", .bits = 64, .planar = 0, .altform = AV_SAMPLE_FMT_S64P },
     [AV_SAMPLE_FMT_FLT]  = { .name =  "flt", .bits = 32, .planar = 0, .altform = AV_SAMPLE_FMT_FLTP },
     [AV_SAMPLE_FMT_DBL]  = { .name =  "dbl", .bits = 64, .planar = 0, .altform = AV_SAMPLE_FMT_DBLP },
     [AV_SAMPLE_FMT_U8P]  = { .name =  "u8p", .bits =  8, .planar = 1, .altform = AV_SAMPLE_FMT_U8   },
     [AV_SAMPLE_FMT_S16P] = { .name = "s16p", .bits = 16, .planar = 1, .altform = AV_SAMPLE_FMT_S16  },
     [AV_SAMPLE_FMT_S32P] = { .name = "s32p", .bits = 32, .planar = 1, .altform = AV_SAMPLE_FMT_S32  },
-    [AV_SAMPLE_FMT_S64P] = { .name = "s64p", .bits = 64, .planar = 1, .altform = AV_SAMPLE_FMT_S64  },
     [AV_SAMPLE_FMT_FLTP] = { .name = "fltp", .bits = 32, .planar = 1, .altform = AV_SAMPLE_FMT_FLT  },
     [AV_SAMPLE_FMT_DBLP] = { .name = "dblp", .bits = 64, .planar = 1, .altform = AV_SAMPLE_FMT_DBL  },
 };
@@ -111,6 +107,14 @@ int av_get_bytes_per_sample(enum AVSampleFormat sample_fmt)
         0 : sample_fmt_info[sample_fmt].bits >> 3;
 }
 
+#if FF_API_GET_BITS_PER_SAMPLE_FMT
+int av_get_bits_per_sample_fmt(enum AVSampleFormat sample_fmt)
+{
+    return sample_fmt < 0 || sample_fmt >= AV_SAMPLE_FMT_NB ?
+        0 : sample_fmt_info[sample_fmt].bits;
+}
+#endif
+
 int av_sample_fmt_is_planar(enum AVSampleFormat sample_fmt)
 {
      if (sample_fmt < 0 || sample_fmt >= AV_SAMPLE_FMT_NB)
@@ -162,21 +166,18 @@ int av_samples_fill_arrays(uint8_t **audio_data, int *linesize,
     if (buf_size < 0)
         return buf_size;
 
-    if (linesize)
-        *linesize = line_size;
-
-    memset(audio_data, 0, planar
-                          ? sizeof(*audio_data) * nb_channels
-                          : sizeof(*audio_data));
-
-    if (!buf)
-        return buf_size;
-
     audio_data[0] = (uint8_t *)buf;
     for (ch = 1; planar && ch < nb_channels; ch++)
         audio_data[ch] = audio_data[ch-1] + line_size;
 
+    if (linesize)
+        *linesize = line_size;
+
+#if FF_API_SAMPLES_UTILS_RETURN_ZERO
+    return 0;
+#else
     return buf_size;
+#endif
 }
 
 int av_samples_alloc(uint8_t **audio_data, int *linesize, int nb_channels,
@@ -201,25 +202,14 @@ int av_samples_alloc(uint8_t **audio_data, int *linesize, int nb_channels,
 
     av_samples_set_silence(audio_data, 0, nb_samples, nb_channels, sample_fmt);
 
+#if FF_API_SAMPLES_UTILS_RETURN_ZERO
+    return 0;
+#else
     return size;
+#endif
 }
 
-int av_samples_alloc_array_and_samples(uint8_t ***audio_data, int *linesize, int nb_channels,
-                                       int nb_samples, enum AVSampleFormat sample_fmt, int align)
-{
-    int ret, nb_planes = av_sample_fmt_is_planar(sample_fmt) ? nb_channels : 1;
-
-    *audio_data = av_calloc(nb_planes, sizeof(**audio_data));
-    if (!*audio_data)
-        return AVERROR(ENOMEM);
-    ret = av_samples_alloc(*audio_data, linesize, nb_channels,
-                           nb_samples, sample_fmt, align);
-    if (ret < 0)
-        av_freep(audio_data);
-    return ret;
-}
-
-int av_samples_copy(uint8_t * const *dst, uint8_t * const *src, int dst_offset,
+int av_samples_copy(uint8_t **dst, uint8_t * const *src, int dst_offset,
                     int src_offset, int nb_samples, int nb_channels,
                     enum AVSampleFormat sample_fmt)
 {
@@ -243,7 +233,7 @@ int av_samples_copy(uint8_t * const *dst, uint8_t * const *src, int dst_offset,
     return 0;
 }
 
-int av_samples_set_silence(uint8_t * const *audio_data, int offset, int nb_samples,
+int av_samples_set_silence(uint8_t **audio_data, int offset, int nb_samples,
                            int nb_channels, enum AVSampleFormat sample_fmt)
 {
     int planar      = av_sample_fmt_is_planar(sample_fmt);

@@ -1,24 +1,14 @@
 #!/bin/sh
 
-OUT_DIR="${1}"
-SRC_DIR="${2}"
-DOXYFILE="${3}"
-DOXYGEN="${4}"
+SRC_PATH="${1}"
+DOXYFILE="${2}"
 
-shift 4
+shift 2
 
-cd ${SRC_DIR}
-
-if [ -e "VERSION" ]; then
-    VERSION=`cat "VERSION"`
-else
-    VERSION=`git describe`
-fi
-
-$DOXYGEN - <<EOF
+doxygen - <<EOF
 @INCLUDE        = ${DOXYFILE}
 INPUT           = $@
-HTML_TIMESTAMP  = NO
-PROJECT_NUMBER  = $VERSION
-OUTPUT_DIRECTORY = $OUT_DIR
+HTML_HEADER     = ${SRC_PATH}/doc/doxy/header.html
+HTML_FOOTER     = ${SRC_PATH}/doc/doxy/footer.html
+HTML_STYLESHEET = ${SRC_PATH}/doc/doxy/doxy_stylesheet.css
 EOF

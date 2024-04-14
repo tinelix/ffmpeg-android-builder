@@ -19,12 +19,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/channel_layout.h"
+#include "libavutil/bswap.h"
 #include "libavutil/crc.h"
 #include "libavutil/intreadwrite.h"
-
-#define CACHED_BITSTREAM_READER !ARCH_X86_32
-#define BITSTREAM_READER_LE
 #include "tak.h"
 
 static const int64_t tak_channel_layouts[] = {
@@ -76,6 +73,22 @@ static int tak_get_nb_samples(int sample_rate, enum TAKFrameSizeType type)
     return nb_samples;
 }
 
+static int crc_init = 0;
+#if CONFIG_SMALL
+#define CRC_TABLE_SIZE 257
+#else
+#define CRC_TABLE_SIZE 1024
+#endif
+static AVCRC crc_24[CRC_TABLE_SIZE];
+
+av_cold void ff_tak_init_crc(void)
+{
+    if (!crc_init) {
+        av_crc_init(crc_24, 0, 24, 0x864CFBU, sizeof(crc_24));
+        crc_init = 1;
+    }
+}
+
 int ff_tak_check_crc(const uint8_t *buf, unsigned int buf_size)
 {
     uint32_t crc, CRC;
@@ -84,18 +97,18 @@ int ff_tak_check_crc(const uint8_t *buf, unsigned int buf_size)
         return AVERROR_INVALIDDATA;
     buf_size -= 3;
 
-    CRC = AV_RB24(buf + buf_size);
-    crc = av_crc(av_crc_get_table(AV_CRC_24_IEEE), 0xCE04B7U, buf, buf_size);
+    CRC = av_bswap32(AV_RL24(buf + buf_size)) >> 8;
+    crc = av_crc(crc_24, 0xCE04B7U, buf, buf_size);
     if (CRC != crc)
         return AVERROR_INVALIDDATA;
 
     return 0;
 }
 
-static int tak_parse_streaminfo(TAKStreamInfo *s, GetBitContext *gb)
+void avpriv_tak_parse_streaminfo(GetBitContext *gb, TAKStreamInfo *s)
 {
     uint64_t channel_mask = 0;
-    int frame_type, i, ret;
+    int frame_type, i;
 
     s->codec = get_bits(gb, TAK_ENCODER_CODEC_BITS);
     skip_bits(gb, TAK_ENCODER_PROFILE_BITS);
@@ -124,31 +137,14 @@ static int tak_parse_streaminfo(TAKStreamInfo *s, GetBitContext *gb)
     }
 
     s->ch_layout     = channel_mask;
-
-    ret = tak_get_nb_samples(s->sample_rate, frame_type);
-    if (ret < 0)
-        return ret;
-    s->frame_samples = ret;
-
-    return 0;
+    s->frame_samples = tak_get_nb_samples(s->sample_rate, frame_type);
 }
 
-int avpriv_tak_parse_streaminfo(TAKStreamInfo *s, const uint8_t *buf, int size)
-{
-    GetBitContext gb;
-    int ret = init_get_bits8(&gb, buf, size);
-
-    if (ret < 0)
-        return AVERROR_INVALIDDATA;
-
-    return tak_parse_streaminfo(s, &gb);
-}
-
-int ff_tak_decode_frame_header(void *logctx, GetBitContext *gb,
+int ff_tak_decode_frame_header(AVCodecContext *avctx, GetBitContext *gb,
                                TAKStreamInfo *ti, int log_level_offset)
 {
     if (get_bits(gb, TAK_FRAME_HEADER_SYNC_ID_BITS) != TAK_FRAME_HEADER_SYNC_ID) {
-        av_log(logctx, AV_LOG_ERROR + log_level_offset, "missing sync id\n");
+        av_log(avctx, AV_LOG_ERROR + log_level_offset, "missing sync id\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -163,9 +159,7 @@ int ff_tak_decode_frame_header(void *logctx, GetBitContext *gb,
     }
 
     if (ti->flags & TAK_FRAME_FLAG_HAS_INFO) {
-        int ret = tak_parse_streaminfo(ti, gb);
-        if (ret < 0)
-            return ret;
+        avpriv_tak_parse_streaminfo(gb, ti);
 
         if (get_bits(gb, 6))
             skip_bits(gb, 25);
@@ -173,9 +167,6 @@ int ff_tak_decode_frame_header(void *logctx, GetBitContext *gb,
     }
 
     if (ti->flags & TAK_FRAME_FLAG_HAS_METADATA)
-        return AVERROR_INVALIDDATA;
-
-    if (get_bits_left(gb) < 24)
         return AVERROR_INVALIDDATA;
 
     skip_bits(gb, 24);

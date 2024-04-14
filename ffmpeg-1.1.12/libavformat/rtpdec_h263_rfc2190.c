@@ -8,27 +8,25 @@
  * Copyright 2007 Collabora Ltd, Philippe Kalaf
  * Copyright 2010 Mark Nauwelaerts
  *
- * This file is part of FFmpeg.
+ * This file is part of Libav.
  *
- * FFmpeg is free software; you can redistribute it and/or
+ * Libav is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
  *
- * FFmpeg is distributed in the hope that it will be useful,
+ * Libav is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with FFmpeg; if not, write to the Free Software
+ * License along with Libav; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "avformat.h"
-#include "avio_internal.h"
 #include "rtpdec_formats.h"
-#include "libavutil/attributes.h"
 #include "libavutil/intreadwrite.h"
 #include "libavcodec/get_bits.h"
 
@@ -40,9 +38,21 @@ struct PayloadContext {
     int          newformat;
 };
 
-static void h263_close_context(PayloadContext *data)
+static PayloadContext *h263_new_context(void)
 {
-    ffio_free_dyn_buf(&data->buf);
+    return av_mallocz(sizeof(PayloadContext));
+}
+
+static void h263_free_context(PayloadContext *data)
+{
+    if (!data)
+        return;
+    if (data->buf) {
+        uint8_t *p;
+        avio_close_dyn_buf(data->buf, &p);
+        av_free(p);
+    }
+    av_free(data);
 }
 
 static int h263_handle_packet(AVFormatContext *ctx, PayloadContext *data,
@@ -60,8 +70,10 @@ static int h263_handle_packet(AVFormatContext *ctx, PayloadContext *data,
 
     if (data->buf && data->timestamp != *timestamp) {
         /* Dropping old buffered, unfinished data */
-        ffio_free_dyn_buf(&data->buf);
-        data->endbyte_bits = 0;
+        uint8_t *p;
+        avio_close_dyn_buf(data->buf, &p);
+        av_free(p);
+        data->buf = NULL;
     }
 
     if (len < 4) {
@@ -107,7 +119,7 @@ static int h263_handle_packet(AVFormatContext *ctx, PayloadContext *data,
             /* Invalid src for this format, and bits that should be zero
              * according to RFC 2190 aren't zero. */
             av_log(ctx, AV_LOG_WARNING,
-                   "Interpreting H.263 RTP data as RFC 2429/4629 even though "
+                   "Interpreting H263 RTP data as RFC 2429/4629 even though "
                    "signalled with a static payload type.\n");
             data->newformat = 1;
             return ff_h263_handle_packet(ctx, data, st, pkt, timestamp, buf,
@@ -142,9 +154,7 @@ static int h263_handle_packet(AVFormatContext *ctx, PayloadContext *data,
         } else {
             /* Start/end skip bits not matching - missed packets? */
             GetBitContext gb;
-            ret = init_get_bits(&gb, buf, len*8 - ebit);
-            if (ret < 0)
-                return ret;
+            init_get_bits(&gb, buf, len*8 - ebit);
             skip_bits(&gb, sbit);
             if (data->endbyte_bits) {
                 data->endbyte |= get_bits(&gb, 8 - data->endbyte_bits);
@@ -185,12 +195,11 @@ static int h263_handle_packet(AVFormatContext *ctx, PayloadContext *data,
     return 0;
 }
 
-const RTPDynamicProtocolHandler ff_h263_rfc2190_dynamic_handler = {
+RTPDynamicProtocolHandler ff_h263_rfc2190_dynamic_handler = {
     .codec_type        = AVMEDIA_TYPE_VIDEO,
     .codec_id          = AV_CODEC_ID_H263,
-    .need_parsing      = AVSTREAM_PARSE_FULL,
     .parse_packet      = h263_handle_packet,
-    .priv_data_size    = sizeof(PayloadContext),
-    .close             = h263_close_context,
+    .alloc             = h263_new_context,
+    .free              = h263_free_context,
     .static_payload_id = 34,
 };

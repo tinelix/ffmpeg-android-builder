@@ -1,4 +1,4 @@
-    /*
+/*
  * Copyright (c) 2012
  *      MIPS Technologies, Inc., California.
  *
@@ -54,15 +54,10 @@
 
 #include <string.h>
 
-#include "config.h"
-#include "libavutil/mips/asmdefs.h"
 #include "libavcodec/mpegaudiodsp.h"
 
-#if HAVE_INLINE_ASM
-#if !HAVE_MIPS32R6 && !HAVE_MIPS64R6
-
 static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *window,
-                               int *dither_state, int16_t *samples, ptrdiff_t incr)
+                               int *dither_state, int16_t *samples, int incr)
 {
     register const int32_t *w, *w2, *p;
     int j;
@@ -157,7 +152,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
 
          "extr.w %[sum1],   $ac0,       24                                \n\t"
          "mflo   %[temp3]                                                 \n\t"
-         PTR_ADDIU "%[w],   %[w],       4                                 \n\t"
+         "addi   %[w],      %[w],       4                                 \n\t"
          "and    %[temp1],  %[temp3],   0x00ffffff                        \n\t"
          "slt    %[temp2],  %[sum1],    %[min_asm]                        \n\t"
          "movn   %[sum1],   %[min_asm], %[temp2]                          \n\t"
@@ -171,7 +166,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
           [sum1] "+r" (sum1), [w] "+r" (w), [temp3] "+r" (temp3)
         : [p] "r" (p), [samples] "r" (samples), [min_asm] "r" (min_asm),
           [max_asm] "r" (max_asm)
-        : "memory", "hi","lo"
+        : "hi","lo"
      );
 
      samples += incr;
@@ -185,7 +180,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
              "mtlo   $0,         $ac1                                      \n\t"
              "mthi   $0                                                    \n\t"
              "mtlo   %[temp1]                                              \n\t"
-             PTR_ADDIU "%[p_temp1], %[p_temp1],    4                       \n\t"
+             "addi   %[p_temp1], %[p_temp1],       4                       \n\t"
              "lw     %[w_asm],   0(%[w])                                   \n\t"
              "lw     %[p_asm],   0(%[p_temp1])                             \n\t"
              "lw     %[w2_asm],  0(%[w2])                                  \n\t"
@@ -226,7 +221,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
              "msub   $ac1,       %[w2_asm],        %[p_asm]                \n\t"
              "madd   %[w_asm1],  %[p_asm1]                                 \n\t"
              "msub   $ac1,       %[w2_asm1],       %[p_asm1]               \n\t"
-             PTR_ADDIU "%[p_temp2], %[p_temp2],   -4                      \n\t"
+             "addi   %[p_temp2], %[p_temp2],       -4                      \n\t"
              "lw     %[w_asm],   32*4(%[w])                                \n\t"
              "lw     %[p_asm],   0(%[p_temp2])                             \n\t"
              "lw     %[w2_asm],  32*4(%[w2])                               \n\t"
@@ -267,8 +262,8 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
              "msub   %[w_asm1],  %[p_asm1]                                 \n\t"
              "msub   $ac1,       %[w2_asm],        %[p_asm]                \n\t"
              "msub   $ac1,       %[w2_asm1],       %[p_asm1]               \n\t"
-             PTR_ADDIU "%[w],    %[w],             4                       \n\t"
-             PTR_ADDIU "%[w2],   %[w2],            -4                      \n\t"
+             "addi   %[w],       %[w],             4                       \n\t"
+             "addi   %[w2],      %[w2],            -4                      \n\t"
              "mflo   %[temp2]                                              \n\t"
              "extr.w %[sum1],    $ac0,             24                      \n\t"
              "li     %[temp3],   1                                         \n\t"
@@ -295,7 +290,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
               [w] "+r" (w), [w2] "+r" (w2), [samples] "+r" (samples),
               [samples2] "+r" (samples2), [temp3] "+r" (temp3)
             : [min_asm] "r" (min_asm), [max_asm] "r" (max_asm)
-            : "memory", "hi", "lo", "$ac1hi", "$ac1lo"
+            : "hi", "lo"
         );
 
         samples += incr;
@@ -345,7 +340,7 @@ static void ff_mpadsp_apply_window_mips_fixed(int32_t *synth_buf, int32_t *windo
           [w_asm2] "=&r" (w_asm2), [p_asm2] "=&r" (p_asm2), [sum1] "+r" (sum1)
         : [w] "r" (w), [p] "r" (p), [samples] "r" (samples), [min_asm] "r" (min_asm),
           [max_asm] "r" (max_asm)
-        : "memory", "hi", "lo", "$ac1hi", "$ac1lo"
+        : "hi", "lo"
      );
 
     *dither_state= temp1;
@@ -442,8 +437,6 @@ static void imdct36_mips_fixed(int *out, int *buf, int *in, int *win)
         : [in] "+r" (in), [t1] "=&r" (t1), [t2] "=&r" (t2), [t3] "=&r" (t3),
           [t4] "=&r" (t4), [t5] "=&r" (t5), [t6] "=&r" (t6),
           [t7] "=&r" (t7), [t8] "=&r" (t8)
-        :
-        : "memory"
     );
 
     for(j = 0; j < 2; j++) {
@@ -580,8 +573,7 @@ static void imdct36_mips_fixed(int *out, int *buf, int *in, int *win)
             : [C_2] "r" (C_2), [in1] "r" (in1), [tmp1] "r" (tmp1), [C_8] "r" (C_8),
               [C_4] "r" (C_4), [C_3] "r" (C_3), [C_1] "r" (C_1), [C_7] "r" (C_7),
               [C_3A] "r" (C_3A), [C_5] "r" (C_5)
-            : "memory", "hi", "lo", "$ac1hi", "$ac1lo", "$ac2hi", "$ac2lo",
-              "$ac3hi", "$ac3lo"
+            : "hi", "lo"
          );
     }
 
@@ -881,8 +873,7 @@ static void imdct36_mips_fixed(int *out, int *buf, int *in, int *win)
           [temp_reg5] "=&r" (temp_reg5), [temp_reg6] "=&r" (temp_reg6),
           [out] "+r" (out)
         : [tmp] "r" (tmp), [win] "r" (win), [buf] "r" (buf)
-        : "memory", "hi", "lo", "$ac1hi", "$ac1lo", "$ac2hi", "$ac2lo",
-          "$ac3hi", "$ac3lo"
+        : "hi", "lo"
     );
 }
 
@@ -905,15 +896,8 @@ static void ff_imdct36_blocks_mips_fixed(int *out, int *buf, int *in,
     }
 }
 
-#endif /* !HAVE_MIPS32R6 && !HAVE_MIPS64R6 */
-#endif /* HAVE_INLINE_ASM */
-
-void ff_mpadsp_init_mipsdsp(MPADSPContext *s)
+void ff_mpadsp_init_mipsdspr1(MPADSPContext *s)
 {
-#if HAVE_INLINE_ASM
-#if !HAVE_MIPS32R6 && !HAVE_MIPS64R6
     s->apply_window_fixed   = ff_mpadsp_apply_window_mips_fixed;
     s->imdct36_blocks_fixed = ff_imdct36_blocks_mips_fixed;
-#endif
-#endif
 }

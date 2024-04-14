@@ -20,21 +20,23 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config.h"
-
+#include "libavutil/imgutils.h"
 #include "libavutil/avassert.h"
-#include "libavutil/imgutils_internal.h"
 #include "avcodec.h"
 #include "bytestream.h"
 #include "bmp.h"
-#include "codec_internal.h"
-#include "encode.h"
+#include "internal.h"
 
 static const uint32_t monoblack_pal[] = { 0x000000, 0xFFFFFF };
 static const uint32_t rgb565_masks[]  = { 0xF800, 0x07E0, 0x001F };
 static const uint32_t rgb444_masks[]  = { 0x0F00, 0x00F0, 0x000F };
 
 static av_cold int bmp_encode_init(AVCodecContext *avctx){
+    BMPContext *s = avctx->priv_data;
+
+    avcodec_get_frame_defaults(&s->picture);
+    avctx->coded_frame = &s->picture;
+
     switch (avctx->pix_fmt) {
     case AV_PIX_FMT_BGRA:
         avctx->bits_per_coded_sample = 32;
@@ -58,6 +60,9 @@ static av_cold int bmp_encode_init(AVCodecContext *avctx){
     case AV_PIX_FMT_MONOBLACK:
         avctx->bits_per_coded_sample = 1;
         break;
+    default:
+        av_log(avctx, AV_LOG_INFO, "unsupported pixel format\n");
+        return -1;
     }
 
     return 0;
@@ -66,15 +71,17 @@ static av_cold int bmp_encode_init(AVCodecContext *avctx){
 static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                             const AVFrame *pict, int *got_packet)
 {
-    const AVFrame * const p = pict;
+    BMPContext *s = avctx->priv_data;
+    AVFrame * const p = &s->picture;
     int n_bytes_image, n_bytes_per_row, n_bytes, i, n, hsize, ret;
     const uint32_t *pal = NULL;
     uint32_t palette256[256];
     int pad_bytes_per_row, pal_entries = 0, compression = BMP_RGB;
     int bit_count = avctx->bits_per_coded_sample;
-    const uint8_t *ptr;
-    uint8_t *buf;
-
+    uint8_t *ptr, *buf;
+    *p = *pict;
+    p->pict_type= AV_PICTURE_TYPE_I;
+    p->key_frame= 1;
     switch (avctx->pix_fmt) {
     case AV_PIX_FMT_RGB444:
         compression = BMP_BITFIELDS;
@@ -113,7 +120,7 @@ static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 #define SIZE_BITMAPINFOHEADER 40
     hsize = SIZE_BITMAPFILEHEADER + SIZE_BITMAPINFOHEADER + (pal_entries << 2);
     n_bytes = n_bytes_image + hsize;
-    if ((ret = ff_get_encode_buffer(avctx, pkt, n_bytes, 0)) < 0)
+    if ((ret = ff_alloc_packet2(avctx, pkt, n_bytes)) < 0)
         return ret;
     buf = pkt->data;
     bytestream_put_byte(&buf, 'B');                   // BITMAPFILEHEADER.bfType
@@ -139,10 +146,11 @@ static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     ptr = p->data[0] + (avctx->height - 1) * p->linesize[0];
     buf = pkt->data + hsize;
     for(i = 0; i < avctx->height; i++) {
-        if (HAVE_BIGENDIAN && bit_count == 16) {
+        if (bit_count == 16) {
             const uint16_t *src = (const uint16_t *) ptr;
+            uint16_t *dst = (uint16_t *) buf;
             for(n = 0; n < avctx->width; n++)
-                AV_WL16(buf + 2 * n, src[n]);
+                AV_WL16(dst + n, src[n]);
         } else {
             memcpy(buf, ptr, n_bytes_per_row);
         }
@@ -152,23 +160,24 @@ static int bmp_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         ptr -= p->linesize[0]; // ... and go back
     }
 
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
     return 0;
 }
 
-const FFCodec ff_bmp_encoder = {
-    .p.name         = "bmp",
-    CODEC_LONG_NAME("BMP (Windows and OS/2 bitmap)"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_BMP,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+AVCodec ff_bmp_encoder = {
+    .name           = "bmp",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_BMP,
+    .priv_data_size = sizeof(BMPContext),
     .init           = bmp_encode_init,
-    FF_CODEC_ENCODE_CB(bmp_encode_frame),
-    .p.pix_fmts     = (const enum AVPixelFormat[]){
+    .encode2        = bmp_encode_frame,
+    .pix_fmts       = (const enum AVPixelFormat[]){
         AV_PIX_FMT_BGRA, AV_PIX_FMT_BGR24,
         AV_PIX_FMT_RGB565, AV_PIX_FMT_RGB555, AV_PIX_FMT_RGB444,
         AV_PIX_FMT_RGB8, AV_PIX_FMT_BGR8, AV_PIX_FMT_RGB4_BYTE, AV_PIX_FMT_BGR4_BYTE, AV_PIX_FMT_GRAY8, AV_PIX_FMT_PAL8,
         AV_PIX_FMT_MONOBLACK,
         AV_PIX_FMT_NONE
     },
+    .long_name      = NULL_IF_CONFIG_SMALL("BMP (Windows and OS/2 bitmap)"),
 };

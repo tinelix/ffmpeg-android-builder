@@ -20,12 +20,16 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
+#include "mjpeg.h"
+#include "mjpegdec.h"
 #include "libavutil/imgutils.h"
 
 typedef struct {
-    int interlace;
+    MJpegDecodeContext mjpeg_ctx;
+    AVFrame frame;
+    int is_mjpeg;
+    int interlace; //FIXME use frame.interlaced_frame
     int tff;
 } AVRnContext;
 
@@ -34,9 +38,21 @@ static av_cold int init(AVCodecContext *avctx)
     AVRnContext *a = avctx->priv_data;
     int ret;
 
+    // Support "Resolution 1:1" for Avid AVI Codec
+    a->is_mjpeg = avctx->extradata_size < 31 || memcmp(&avctx->extradata[28], "1:1", 3);
+
+    if(!a->is_mjpeg && avctx->lowres) {
+        av_log(avctx, AV_LOG_ERROR, "lowres is not possible with rawvideo\n");
+        return AVERROR(EINVAL);
+    }
+
+    if(a->is_mjpeg)
+        return ff_mjpeg_decode_init(avctx);
+
     if ((ret = av_image_check_size(avctx->width, avctx->height, 0, avctx)) < 0)
         return ret;
 
+    avcodec_get_frame_defaults(&a->frame);
     avctx->pix_fmt = AV_PIX_FMT_UYVY422;
 
     if(avctx->extradata_size >= 9 && avctx->extradata[4]+28 < avctx->extradata_size) {
@@ -50,25 +66,47 @@ static av_cold int init(AVCodecContext *avctx)
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *p,
+static av_cold int end(AVCodecContext *avctx)
+{
+    AVRnContext *a = avctx->priv_data;
+    AVFrame *p = &a->frame;
+
+    if(p->data[0])
+        avctx->release_buffer(avctx, p);
+
+    if(a->is_mjpeg)
+        ff_mjpeg_decode_end(avctx);
+
+    return 0;
+}
+
+static int decode_frame(AVCodecContext *avctx, void *data,
                         int *got_frame, AVPacket *avpkt)
 {
     AVRnContext *a = avctx->priv_data;
+    AVFrame *p = &a->frame;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     int y, ret, true_height;
 
+    if(a->is_mjpeg)
+        return ff_mjpeg_decode_frame(avctx, data, got_frame, avpkt);
+
     true_height    = buf_size / (2*avctx->width);
+    if(p->data[0])
+        avctx->release_buffer(avctx, p);
 
     if(buf_size < 2*avctx->width * avctx->height) {
         av_log(avctx, AV_LOG_ERROR, "packet too small\n");
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
+    if((ret = ff_get_buffer(avctx, p)) < 0){
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
+    }
     p->pict_type= AV_PICTURE_TYPE_I;
-    p->flags |= AV_FRAME_FLAG_KEY;
+    p->key_frame= 1;
 
     if(a->interlace) {
         buf += (true_height - avctx->height)*avctx->width;
@@ -85,18 +123,21 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *p,
         }
     }
 
+    *(AVFrame*)data = a->frame;
     *got_frame      = 1;
     return buf_size;
 }
 
-const FFCodec ff_avrn_decoder = {
-    .p.name         = "avrn",
-    CODEC_LONG_NAME("Avid AVI Codec"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_AVRN,
+AVCodec ff_avrn_decoder = {
+    .name           = "avrn",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_AVRN,
     .priv_data_size = sizeof(AVRnContext),
     .init           = init,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .close          = end,
+    .decode         = decode_frame,
+    .long_name      = NULL_IF_CONFIG_SMALL("Avid AVI Codec"),
+    .capabilities   = CODEC_CAP_DR1,
+    .max_lowres     = 3,
 };
+

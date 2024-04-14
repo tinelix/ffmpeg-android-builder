@@ -19,101 +19,60 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
-#include "libavutil/imgutils.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/opt.h"
-#include "demux.h"
 #include "internal.h"
 #include "avformat.h"
 
 typedef struct RawVideoDemuxerContext {
     const AVClass *class;     /**< Class for private options. */
-    int width, height;        /**< Integers describing video size, set by a private option. */
+    char *video_size;         /**< String describing video size, set by a private option. */
     char *pixel_format;       /**< Set by a private option. */
-    AVRational framerate;     /**< AVRational describing framerate, set by a private option. */
+    char *framerate;          /**< String describing framerate, set by a private option. */
 } RawVideoDemuxerContext;
 
-// v210 frame width is padded to multiples of 48
-#define GET_PACKET_SIZE(w, h) (((w + 47) / 48) * 48 * h * 8 / 3)
 
 static int rawvideo_read_header(AVFormatContext *ctx)
 {
     RawVideoDemuxerContext *s = ctx->priv_data;
+    int width = 0, height = 0, ret = 0;
     enum AVPixelFormat pix_fmt;
+    AVRational framerate;
     AVStream *st;
-    int packet_size;
-    int ret;
 
     st = avformat_new_stream(ctx, NULL);
     if (!st)
         return AVERROR(ENOMEM);
 
-    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
 
-    st->codecpar->codec_id = ffifmt(ctx->iformat)->raw_codec_id;
+    st->codec->codec_id = ctx->iformat->raw_codec_id;
 
-    if ((ffifmt(ctx->iformat)->raw_codec_id != AV_CODEC_ID_V210) &&
-        (ffifmt(ctx->iformat)->raw_codec_id != AV_CODEC_ID_V210X)) {
-        if ((pix_fmt = av_get_pix_fmt(s->pixel_format)) == AV_PIX_FMT_NONE) {
-            av_log(ctx, AV_LOG_ERROR, "No such pixel format: %s.\n",
-                    s->pixel_format);
-            return AVERROR(EINVAL);
-        }
-    }
-
-    avpriv_set_pts_info(st, 64, s->framerate.den, s->framerate.num);
-
-    ret = av_image_check_size(s->width, s->height, 0, ctx);
-    if (ret < 0)
+    if (s->video_size &&
+        (ret = av_parse_video_size(&width, &height, s->video_size)) < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Couldn't parse video size.\n");
         return ret;
-
-    st->codecpar->width  = s->width;
-    st->codecpar->height = s->height;
-
-    if (ffifmt(ctx->iformat)->raw_codec_id == AV_CODEC_ID_BITPACKED) {
-        unsigned int pgroup; /* size of the pixel group in bytes */
-        unsigned int xinc;
-        const AVPixFmtDescriptor *desc;
-        int tag;
-
-        desc = av_pix_fmt_desc_get(pix_fmt);
-        st->codecpar->bits_per_coded_sample = av_get_bits_per_pixel(desc);
-        if (pix_fmt == AV_PIX_FMT_YUV422P10) {
-            tag = MKTAG('U', 'Y', 'V', 'Y');
-            pgroup = 5;
-            xinc   = 2;
-        } else if (pix_fmt == AV_PIX_FMT_UYVY422) {
-            tag = MKTAG('U', 'Y', 'V', 'Y');
-            pgroup = 4;
-            xinc   = 2;
-            st->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
-        } else {
-            av_log(ctx, AV_LOG_ERROR, "unsupported format: %s for bitpacked.\n",
-                    s->pixel_format);
-            return AVERROR(EINVAL);
-        }
-        st->codecpar->codec_tag = tag;
-        packet_size  = s->width * s->height * pgroup / xinc;
-    } else if ((ffifmt(ctx->iformat)->raw_codec_id == AV_CODEC_ID_V210) ||
-               (ffifmt(ctx->iformat)->raw_codec_id == AV_CODEC_ID_V210X)) {
-        pix_fmt = ffifmt(ctx->iformat)->raw_codec_id == AV_CODEC_ID_V210 ?
-                  AV_PIX_FMT_YUV422P10 : AV_PIX_FMT_YUV422P16;
-
-        packet_size = GET_PACKET_SIZE(s->width, s->height);
-    } else {
-        packet_size = av_image_get_buffer_size(pix_fmt, s->width, s->height, 1);
-        if (packet_size < 0)
-            return packet_size;
     }
-    if (packet_size == 0)
-        return AVERROR(EINVAL);
 
-    st->codecpar->format = pix_fmt;
-    ctx->packet_size = packet_size;
-    st->codecpar->bit_rate = av_rescale_q(ctx->packet_size,
+    if ((pix_fmt = av_get_pix_fmt(s->pixel_format)) == AV_PIX_FMT_NONE) {
+        av_log(ctx, AV_LOG_ERROR, "No such pixel format: %s.\n",
+               s->pixel_format);
+        return AVERROR(EINVAL);
+    }
+
+    if ((ret = av_parse_video_rate(&framerate, s->framerate)) < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not parse framerate: %s.\n",
+               s->framerate);
+        return ret;
+    }
+
+    avpriv_set_pts_info(st, 64, framerate.den, framerate.num);
+
+    st->codec->width  = width;
+    st->codec->height = height;
+    st->codec->pix_fmt = pix_fmt;
+    st->codec->bit_rate = av_rescale_q(avpicture_get_size(st->codec->pix_fmt, width, height),
                                        (AVRational){8,1}, st->time_base);
 
     return 0;
@@ -122,10 +81,18 @@ static int rawvideo_read_header(AVFormatContext *ctx)
 
 static int rawvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    int ret;
+    int packet_size, ret, width, height;
+    AVStream *st = s->streams[0];
 
-    ret = av_get_packet(s->pb, pkt, s->packet_size);
-    pkt->pts = pkt->dts = pkt->pos / s->packet_size;
+    width = st->codec->width;
+    height = st->codec->height;
+
+    packet_size = avpicture_get_size(st->codec->pix_fmt, width, height);
+    if (packet_size < 0)
+        return -1;
+
+    ret = av_get_packet(s->pb, pkt, packet_size);
+    pkt->pts = pkt->dts = pkt->pos / packet_size;
 
     pkt->stream_index = 0;
     if (ret < 0)
@@ -136,10 +103,9 @@ static int rawvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
 #define OFFSET(x) offsetof(RawVideoDemuxerContext, x)
 #define DEC AV_OPT_FLAG_DECODING_PARAM
 static const AVOption rawvideo_options[] = {
-    /* pixel_format is not used by the v210 demuxers. */
-    { "pixel_format", "set pixel format", OFFSET(pixel_format), AV_OPT_TYPE_STRING, {.str = "yuv420p"}, 0, 0, DEC },
-    { "video_size", "set frame size", OFFSET(width), AV_OPT_TYPE_IMAGE_SIZE, {.str = NULL}, 0, 0, DEC },
-    { "framerate", "set frame rate", OFFSET(framerate), AV_OPT_TYPE_VIDEO_RATE, {.str = "25"}, 0, INT_MAX, DEC },
+    { "video_size", "A string describing frame size, such as 640x480 or hd720.", OFFSET(video_size), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, DEC },
+    { "pixel_format", "", OFFSET(pixel_format), AV_OPT_TYPE_STRING, {.str = "yuv420p"}, 0, 0, DEC },
+    { "framerate", "", OFFSET(framerate), AV_OPT_TYPE_STRING, {.str = "25"}, 0, 0, DEC },
     { NULL },
 };
 
@@ -150,70 +116,14 @@ static const AVClass rawvideo_demuxer_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFInputFormat ff_rawvideo_demuxer = {
-    .p.name         = "rawvideo",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("raw video"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.extensions   = "yuv,cif,qcif,rgb",
-    .p.priv_class   = &rawvideo_demuxer_class,
+AVInputFormat ff_rawvideo_demuxer = {
+    .name           = "rawvideo",
+    .long_name      = NULL_IF_CONFIG_SMALL("raw video"),
     .priv_data_size = sizeof(RawVideoDemuxerContext),
     .read_header    = rawvideo_read_header,
     .read_packet    = rawvideo_read_packet,
+    .flags          = AVFMT_GENERIC_INDEX,
+    .extensions     = "yuv,cif,qcif,rgb",
     .raw_codec_id   = AV_CODEC_ID_RAWVIDEO,
+    .priv_class     = &rawvideo_demuxer_class,
 };
-
-static const AVClass bitpacked_demuxer_class = {
-    .class_name = "bitpacked demuxer",
-    .item_name  = av_default_item_name,
-    .option     = rawvideo_options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
-
-#if CONFIG_BITPACKED_DEMUXER
-const FFInputFormat ff_bitpacked_demuxer = {
-    .p.name         = "bitpacked",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Bitpacked"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.extensions   = "bitpacked",
-    .p.priv_class   = &bitpacked_demuxer_class,
-    .priv_data_size = sizeof(RawVideoDemuxerContext),
-    .read_header    = rawvideo_read_header,
-    .read_packet    = rawvideo_read_packet,
-    .raw_codec_id   = AV_CODEC_ID_BITPACKED,
-};
-#endif // CONFIG_BITPACKED_DEMUXER
-
-static const AVClass v210_demuxer_class = {
-    .class_name = "v210(x) demuxer",
-    .item_name  = av_default_item_name,
-    .option     = rawvideo_options + 1,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
-
-#if CONFIG_V210_DEMUXER
-const FFInputFormat ff_v210_demuxer = {
-    .p.name         = "v210",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Uncompressed 4:2:2 10-bit"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.extensions   = "v210",
-    .p.priv_class   = &v210_demuxer_class,
-    .priv_data_size = sizeof(RawVideoDemuxerContext),
-    .read_header    = rawvideo_read_header,
-    .read_packet    = rawvideo_read_packet,
-    .raw_codec_id   = AV_CODEC_ID_V210,
-};
-#endif // CONFIG_V210_DEMUXER
-
-#if CONFIG_V210X_DEMUXER
-const FFInputFormat ff_v210x_demuxer = {
-    .p.name         = "v210x",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Uncompressed 4:2:2 10-bit"),
-    .p.flags        = AVFMT_GENERIC_INDEX,
-    .p.extensions   = "yuv10",
-    .p.priv_class   = &v210_demuxer_class,
-    .priv_data_size = sizeof(RawVideoDemuxerContext),
-    .read_header    = rawvideo_read_header,
-    .read_packet    = rawvideo_read_packet,
-    .raw_codec_id   = AV_CODEC_ID_V210X,
-};
-#endif // CONFIG_V210X_DEMUXER

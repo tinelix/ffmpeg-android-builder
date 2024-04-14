@@ -23,11 +23,9 @@
  */
 
 #include "libavutil/imgutils.h"
-#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "encode.h"
+#include "internal.h"
 
 /** Maximum RLE code for bulk copy */
 #define MAX_RLE_BULK   127
@@ -38,8 +36,9 @@
 
 typedef struct QtrleEncContext {
     AVCodecContext *avctx;
+    AVFrame frame;
     int pixel_size;
-    AVFrame *previous_frame;
+    AVPicture previous_frame;
     unsigned int max_buf_size;
     int logical_width;
     /**
@@ -60,25 +59,12 @@ typedef struct QtrleEncContext {
      * Will contain at ith position the number of consecutive pixels equal to the previous
      * frame starting from pixel i */
     uint8_t* skip_table;
-
-    /** Encoded frame is a key frame */
-    int key_frame;
 } QtrleEncContext;
-
-static av_cold int qtrle_encode_end(AVCodecContext *avctx)
-{
-    QtrleEncContext *s = avctx->priv_data;
-
-    av_frame_free(&s->previous_frame);
-    av_free(s->rlecode_table);
-    av_free(s->length_table);
-    av_free(s->skip_table);
-    return 0;
-}
 
 static av_cold int qtrle_encode_init(AVCodecContext *avctx)
 {
     QtrleEncContext *s = avctx->priv_data;
+    int ret;
 
     if (av_image_check_size(avctx->width, avctx->height, 0, avctx) < 0) {
         return AVERROR(EINVAL);
@@ -88,10 +74,6 @@ static av_cold int qtrle_encode_init(AVCodecContext *avctx)
 
     switch (avctx->pix_fmt) {
     case AV_PIX_FMT_GRAY8:
-        if (avctx->width % 4) {
-            av_log(avctx, AV_LOG_ERROR, "Width not being a multiple of 4 is not supported\n");
-            return AVERROR(EINVAL);
-        }
         s->logical_width = avctx->width / 4;
         s->pixel_size = 4;
         break;
@@ -112,22 +94,21 @@ static av_cold int qtrle_encode_init(AVCodecContext *avctx)
 
     s->rlecode_table = av_mallocz(s->logical_width);
     s->skip_table    = av_mallocz(s->logical_width);
-    s->length_table  = av_calloc(s->logical_width + 1, sizeof(*s->length_table));
+    s->length_table  = av_mallocz((s->logical_width + 1)*sizeof(int));
     if (!s->skip_table || !s->length_table || !s->rlecode_table) {
         av_log(avctx, AV_LOG_ERROR, "Error allocating memory.\n");
         return AVERROR(ENOMEM);
     }
-    s->previous_frame = av_frame_alloc();
-    if (!s->previous_frame) {
+    if ((ret = avpicture_alloc(&s->previous_frame, avctx->pix_fmt, avctx->width, avctx->height)) < 0) {
         av_log(avctx, AV_LOG_ERROR, "Error allocating picture\n");
-        return AVERROR(ENOMEM);
+        return ret;
     }
 
     s->max_buf_size = s->logical_width*s->avctx->height*s->pixel_size*2 /* image base material */
                       + 15                                            /* header + footer */
                       + s->avctx->height*2                            /* skip code+rle end */
                       + s->logical_width/MAX_RLE_BULK + 1             /* rle codes */;
-
+    avctx->coded_frame = &s->frame;
     return 0;
 }
 
@@ -140,7 +121,9 @@ static void qtrle_encode_line(QtrleEncContext *s, const AVFrame *p, int line, ui
     int i;
     signed char rlecode;
 
-    /* This will be the number of pixels equal to the previous frame one's
+    /* We will use it to compute the best bulk copy sequence */
+    unsigned int av_uninit(bulkcount);
+    /* This will be the number of pixels equal to the preivous frame one's
      * starting from the ith pixel */
     unsigned int skipcount;
     /* This will be the number of consecutive equal pixels in the current
@@ -148,82 +131,24 @@ static void qtrle_encode_line(QtrleEncContext *s, const AVFrame *p, int line, ui
     unsigned int av_uninit(repeatcount);
 
     /* The cost of the three different possibilities */
+    int total_bulk_cost;
     int total_skip_cost;
     int total_repeat_cost;
 
-    int base_bulk_cost;
-    int lowest_bulk_cost;
-    int lowest_bulk_cost_index;
-    int sec_lowest_bulk_cost;
-    int sec_lowest_bulk_cost_index;
+    int temp_cost;
+    int j;
 
-    const uint8_t *this_line = p->data[0] + line * p->linesize[0] + width * s->pixel_size;
-    /* There might be no earlier frame if the current frame is a keyframe.
-     * So just use a pointer to the current frame to avoid a check
-     * to avoid NULL - s->pixel_size (which is undefined behaviour). */
-    const uint8_t *prev_line = s->key_frame ? this_line
-                                            : s->previous_frame->data[0]
-                                              + line * s->previous_frame->linesize[0]
-                                              + width * s->pixel_size;
+    uint8_t *this_line = p->               data[0] + line*p->               linesize[0] +
+        (width - 1)*s->pixel_size;
+    uint8_t *prev_line = s->previous_frame.data[0] + line*s->previous_frame.linesize[0] +
+        (width - 1)*s->pixel_size;
 
     s->length_table[width] = 0;
     skipcount = 0;
 
-    /* Initial values */
-    lowest_bulk_cost = INT_MAX / 2;
-    lowest_bulk_cost_index = width;
-    sec_lowest_bulk_cost = INT_MAX / 2;
-    sec_lowest_bulk_cost_index = width;
-
-    base_bulk_cost = 1 + s->pixel_size;
-
     for (i = width - 1; i >= 0; i--) {
 
-        int prev_bulk_cost;
-
-        this_line -= s->pixel_size;
-        prev_line -= s->pixel_size;
-
-        /* If our lowest bulk cost index is too far away, replace it
-         * with the next lowest bulk cost */
-        if (FFMIN(width, i + MAX_RLE_BULK) < lowest_bulk_cost_index) {
-            lowest_bulk_cost = sec_lowest_bulk_cost;
-            lowest_bulk_cost_index = sec_lowest_bulk_cost_index;
-
-            sec_lowest_bulk_cost = INT_MAX / 2;
-            sec_lowest_bulk_cost_index = width;
-        }
-
-        /* Deal with the first pixel's bulk cost */
-        if (!i) {
-            base_bulk_cost++;
-            lowest_bulk_cost++;
-            sec_lowest_bulk_cost++;
-        }
-
-        /* Look at the bulk cost of the previous loop and see if it is
-         * a new lower bulk cost */
-        prev_bulk_cost = s->length_table[i + 1] + base_bulk_cost;
-        if (prev_bulk_cost <= sec_lowest_bulk_cost) {
-            /* If it's lower than the 2nd lowest, then it may be lower
-             * than the lowest */
-            if (prev_bulk_cost <= lowest_bulk_cost) {
-
-                /* If we have found a new lowest bulk cost,
-                 * then the 2nd lowest bulk cost is now farther than the
-                 * lowest bulk cost, and will never be used */
-                sec_lowest_bulk_cost = INT_MAX / 2;
-
-                lowest_bulk_cost = prev_bulk_cost;
-                lowest_bulk_cost_index = i + 1;
-            } else {
-                /* Then it must be the 2nd lowest bulk cost */
-                sec_lowest_bulk_cost = prev_bulk_cost;
-                sec_lowest_bulk_cost_index = i + 1;
-            }
-        }
-
-        if (!s->key_frame && !memcmp(this_line, prev_line, s->pixel_size))
+        if (!s->frame.key_frame && !memcmp(this_line, prev_line, s->pixel_size))
             skipcount = FFMIN(skipcount + 1, MAX_RLE_SKIP);
         else
             skipcount = 0;
@@ -258,19 +183,31 @@ static void qtrle_encode_line(QtrleEncContext *s, const AVFrame *p, int line, ui
         }
         else {
             /* We cannot do neither skip nor repeat
-             * thus we use the best bulk copy  */
+             * thus we search for the best bulk copy to do */
 
-            s->length_table[i]  = lowest_bulk_cost;
-            s->rlecode_table[i] = lowest_bulk_cost_index - i;
+            int limit = FFMIN(width - i, MAX_RLE_BULK);
 
+            temp_cost = 1 + s->pixel_size + !i;
+            total_bulk_cost = INT_MAX;
+
+            for (j = 1; j <= limit; j++) {
+                if (s->length_table[i + j] + temp_cost < total_bulk_cost) {
+                    /* We have found a better bulk copy ... */
+                    total_bulk_cost = s->length_table[i + j] + temp_cost;
+                    bulkcount = j;
+                }
+                temp_cost += s->pixel_size;
+            }
+
+            s->length_table[i]  = total_bulk_cost;
+            s->rlecode_table[i] = bulkcount;
         }
 
-        /* These bulk costs increase every iteration */
-        lowest_bulk_cost += s->pixel_size;
-        sec_lowest_bulk_cost += s->pixel_size;
+        this_line -= s->pixel_size;
+        prev_line -= s->pixel_size;
     }
 
-    /* Good! Now we have the best sequence for this line, let's output it. */
+    /* Good ! Now we have the best sequence for this line, let's output it */
 
     /* We do a special case for the first pixel so that we avoid testing it in
      * the whole loop */
@@ -331,17 +268,17 @@ static int encode_frame(QtrleEncContext *s, const AVFrame *p, uint8_t *buf)
     int end_line = s->avctx->height;
     uint8_t *orig_buf = buf;
 
-    if (!s->key_frame) {
+    if (!s->frame.key_frame) {
         unsigned line_size = s->logical_width * s->pixel_size;
         for (start_line = 0; start_line < s->avctx->height; start_line++)
             if (memcmp(p->data[0] + start_line*p->linesize[0],
-                       s->previous_frame->data[0] + start_line * s->previous_frame->linesize[0],
+                       s->previous_frame.data[0] + start_line*s->previous_frame.linesize[0],
                        line_size))
                 break;
 
         for (end_line=s->avctx->height; end_line > start_line; end_line--)
             if (memcmp(p->data[0] + (end_line - 1)*p->linesize[0],
-                       s->previous_frame->data[0] + (end_line - 1) * s->previous_frame->linesize[0],
+                       s->previous_frame.data[0] + (end_line - 1)*s->previous_frame.linesize[0],
                        line_size))
                 break;
     }
@@ -369,48 +306,57 @@ static int qtrle_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                               const AVFrame *pict, int *got_packet)
 {
     QtrleEncContext * const s = avctx->priv_data;
+    AVFrame * const p = &s->frame;
     int ret;
 
-    if ((ret = ff_alloc_packet(avctx, pkt, s->max_buf_size)) < 0)
+    *p = *pict;
+
+    if ((ret = ff_alloc_packet2(avctx, pkt, s->max_buf_size)) < 0)
         return ret;
 
-    if (avctx->gop_size == 0 || !s->previous_frame->data[0] ||
-        (s->avctx->frame_num % avctx->gop_size) == 0) {
+    if (avctx->gop_size == 0 || (s->avctx->frame_number % avctx->gop_size) == 0) {
         /* I-Frame */
-        s->key_frame = 1;
+        p->pict_type = AV_PICTURE_TYPE_I;
+        p->key_frame = 1;
     } else {
         /* P-Frame */
-        s->key_frame = 0;
+        p->pict_type = AV_PICTURE_TYPE_P;
+        p->key_frame = 0;
     }
 
     pkt->size = encode_frame(s, pict, pkt->data);
 
     /* save the current frame */
-    ret = av_frame_replace(s->previous_frame, pict);
-    if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "cannot add reference\n");
-        return ret;
-    }
+    av_picture_copy(&s->previous_frame, (AVPicture *)p, avctx->pix_fmt, avctx->width, avctx->height);
 
-    if (s->key_frame)
+    if (p->key_frame)
         pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
 
     return 0;
 }
 
-const FFCodec ff_qtrle_encoder = {
-    .p.name         = "qtrle",
-    CODEC_LONG_NAME("QuickTime Animation (RLE) video"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_QTRLE,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+static av_cold int qtrle_encode_end(AVCodecContext *avctx)
+{
+    QtrleEncContext *s = avctx->priv_data;
+
+    avpicture_free(&s->previous_frame);
+    av_free(s->rlecode_table);
+    av_free(s->length_table);
+    av_free(s->skip_table);
+    return 0;
+}
+
+AVCodec ff_qtrle_encoder = {
+    .name           = "qtrle",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_QTRLE,
     .priv_data_size = sizeof(QtrleEncContext),
     .init           = qtrle_encode_init,
-    FF_CODEC_ENCODE_CB(qtrle_encode_frame),
+    .encode2        = qtrle_encode_frame,
     .close          = qtrle_encode_end,
-    .p.pix_fmts     = (const enum AVPixelFormat[]){
+    .pix_fmts       = (const enum AVPixelFormat[]){
         AV_PIX_FMT_RGB24, AV_PIX_FMT_RGB555BE, AV_PIX_FMT_ARGB, AV_PIX_FMT_GRAY8, AV_PIX_FMT_NONE
     },
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .long_name      = NULL_IF_CONFIG_SMALL("QuickTime Animation (RLE) video"),
 };

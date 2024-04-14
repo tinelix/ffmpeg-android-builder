@@ -1,23 +1,23 @@
 ;******************************************************************************
 ;* MMX/SSE2-optimized functions for the RV40 decoder
 ;* Copyright (c) 2010 Ronald S. Bultje <rsbultje@gmail.com>
-;* Copyright (c) 2010 Fiona Glaser <fiona@x264.com>
+;* Copyright (c) 2010 Jason Garrett-Glaser <darkshikari@gmail.com>
 ;* Copyright (C) 2012 Christophe Gisquet <christophe.gisquet@gmail.com>
 ;*
-;* This file is part of FFmpeg.
+;* This file is part of Libav.
 ;*
-;* FFmpeg is free software; you can redistribute it and/or
+;* Libav is free software; you can redistribute it and/or
 ;* modify it under the terms of the GNU Lesser General Public
 ;* License as published by the Free Software Foundation; either
 ;* version 2.1 of the License, or (at your option) any later version.
 ;*
-;* FFmpeg is distributed in the hope that it will be useful,
+;* Libav is distributed in the hope that it will be useful,
 ;* but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ;* Lesser General Public License for more details.
 ;*
 ;* You should have received a copy of the GNU Lesser General Public
-;* License along with FFmpeg; if not, write to the Free Software
+;* License along with Libav; if not, write to the Free Software
 ;* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 ;******************************************************************************
 
@@ -25,6 +25,7 @@
 
 SECTION_RODATA
 
+align 16
 pw_1024:   times 8 dw 1 << (16 - 6) ; pw_1024
 
 sixtap_filter_hb_m:  times 8 db   1, -5
@@ -51,7 +52,7 @@ sixtap_filter_v_m:   times 8 dw   1
                      times 8 dw  20
                      times 8 dw  52
 
-%if PIC
+%ifdef PIC
 %define sixtap_filter_hw   picregq
 %define sixtap_filter_hb   picregq
 %define sixtap_filter_v    picregq
@@ -76,15 +77,15 @@ SECTION .text
 ;-----------------------------------------------------------------------------
 ; subpel MC functions:
 ;
-; void ff_[put|rv40]_rv40_qpel_[h|v]_<opt>(uint8_t *dst, int deststride,
-;                                          uint8_t *src, int srcstride,
-;                                          int len, int m);
+; void [put|rv40]_rv40_qpel_[h|v]_<opt>(uint8_t *dst, int deststride,
+;                                       uint8_t *src, int srcstride,
+;                                       int len, int m);
 ;----------------------------------------------------------------------
 %macro LOAD  2
 %if WIN64
    movsxd   %1q, %1d
 %endif
-%if PIC
+%ifdef PIC
    add      %1q, picregq
 %else
    add      %1q, %2
@@ -97,14 +98,18 @@ SECTION .text
 %endif
     packuswb  %1, %1
 %ifidn %3, avg
-    PAVGB     %1, %2
+%if cpuflag(3dnow)
+    pavgusb   %1, %2
+%else
+    pavgb     %1, %2
+%endif
 %endif
     movh  [dstq], %1
 %endmacro
 
 %macro FILTER_V 1
 cglobal %1_rv40_qpel_v, 6,6+npicregs,12, dst, dststride, src, srcstride, height, my, picreg
-%if PIC
+%ifdef PIC
     lea  picregq, [sixtap_filter_v_m]
 %endif
     pxor      m7, m7
@@ -170,12 +175,12 @@ cglobal %1_rv40_qpel_v, 6,6+npicregs,12, dst, dststride, src, srcstride, height,
     add     srcq, srcstrideq
     dec  heightd                           ; next row
     jg .nextrow
-    RET
+    REP_RET
 %endmacro
 
 %macro FILTER_H  1
 cglobal %1_rv40_qpel_h, 6, 6+npicregs, 12, dst, dststride, src, srcstride, height, mx, picreg
-%if PIC
+%ifdef PIC
     lea  picregq, [sixtap_filter_v_m]
 %endif
     pxor      m7, m7
@@ -227,8 +232,22 @@ cglobal %1_rv40_qpel_h, 6, 6+npicregs, 12, dst, dststride, src, srcstride, heigh
     add     srcq, srcstrideq
     dec  heightd            ; next row
     jg .nextrow
-    RET
+    REP_RET
 %endmacro
+
+%if ARCH_X86_32
+INIT_MMX  mmx
+FILTER_V  put
+FILTER_H  put
+
+INIT_MMX  mmxext
+FILTER_V  avg
+FILTER_H  avg
+
+INIT_MMX  3dnow
+FILTER_V  avg
+FILTER_H  avg
+%endif
 
 INIT_XMM  sse2
 FILTER_H  put
@@ -238,7 +257,7 @@ FILTER_V  avg
 
 %macro FILTER_SSSE3 1
 cglobal %1_rv40_qpel_v, 6,6+npicregs,8, dst, dststride, src, srcstride, height, my, picreg
-%if PIC
+%ifdef PIC
     lea  picregq, [sixtap_filter_hb_m]
 %endif
 
@@ -280,10 +299,10 @@ cglobal %1_rv40_qpel_v, 6,6+npicregs,8, dst, dststride, src, srcstride, height, 
     add     srcq, srcstrideq
     dec       heightd                          ; next row
     jg       .nextrow
-    RET
+    REP_RET
 
 cglobal %1_rv40_qpel_h, 6,6+npicregs,8, dst, dststride, src, srcstride, height, mx, picreg
-%if PIC
+%ifdef PIC
     lea  picregq, [sixtap_filter_hb_m]
 %endif
     mova      m3, [filter_h6_shuf2]
@@ -313,21 +332,21 @@ cglobal %1_rv40_qpel_h, 6,6+npicregs,8, dst, dststride, src, srcstride, height, 
     add     srcq, srcstrideq
     dec  heightd            ; next row
     jg .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM ssse3
 FILTER_SSSE3  put
 FILTER_SSSE3  avg
 
-; %1=5-bit weights?, %2=dst %3=src1 %4=src3 %5=stride if SSE2
+; %1=5bits weights?, %2=dst %3=src1 %4=src3 %5=stride if sse2
 %macro RV40_WCORE  4-5
     movh       m4, [%3 + r6 + 0]
     movh       m5, [%4 + r6 + 0]
 %if %0 == 4
 %define OFFSET r6 + mmsize / 2
 %else
-    ; 8x8 block and SSE2, stride was provided
+    ; 8x8 block and sse2, stride was provided
 %define OFFSET r6
     add        r6, r5
 %endif
@@ -335,7 +354,7 @@ FILTER_SSSE3  avg
     movh       m7, [%4 + OFFSET]
 
 %if %1 == 0
-    ; 14-bit weights
+    ; 14bits weights
     punpcklbw  m4, m0
     punpcklbw  m5, m0
     punpcklbw  m6, m0
@@ -353,7 +372,7 @@ FILTER_SSSE3  avg
     paddw      m4, m5
     paddw      m6, m7
 %else
-    ; 5-bit weights
+    ; 5bits weights
 %if cpuflag(ssse3)
     punpcklbw  m4, m5
     punpcklbw  m6, m7
@@ -389,7 +408,7 @@ FILTER_SSSE3  avg
 
     packuswb   m4, m6
 %if %0 == 5
-    ; Only called for 8x8 blocks and SSE2
+    ; Only called for 8x8 blocks and sse2
     sub        r6, r5
     movh       [%2 + r6], m4
     add        r6, r5
@@ -401,6 +420,15 @@ FILTER_SSSE3  avg
 
 
 %macro MAIN_LOOP   2
+%if mmsize == 8
+    RV40_WCORE %2, r0, r1, r2
+%if %1 == 16
+    RV40_WCORE %2, r0 + 8, r1 + 8, r2 + 8
+%endif
+
+    ; Prepare for next loop
+    add        r6, r5
+%else
 %ifidn %1, 8
     RV40_WCORE %2, r0, r1, r2, r5
     ; Prepare 2 next lines
@@ -410,10 +438,11 @@ FILTER_SSSE3  avg
     ; Prepare single next line
     add        r6, r5
 %endif
+%endif
 
 %endmacro
 
-; void ff_rv40_weight_func_%1(uint8_t *dst, uint8_t *src1, uint8_t *src2, int w1, int w2, int stride)
+; rv40_weight_func_%1(uint8_t *dst, uint8_t *src1, uint8_t *src2, int w1, int w2, int stride)
 ; %1=size  %2=num of xmm regs
 ; The weights are FP0.14 notation of fractions depending on pts.
 ; For timebases without rounding error (i.e. PAL), the fractions
@@ -454,8 +483,14 @@ cglobal rv40_weight_func_%1_%2, 6, 7, 8
 .loop:
     MAIN_LOOP  %2, RND
     jnz        .loop
-    RET
+    REP_RET
 %endmacro
+
+INIT_MMX mmxext
+RV40_WEIGHT   rnd,    8, 3
+RV40_WEIGHT   rnd,   16, 4
+RV40_WEIGHT   nornd,  8, 3
+RV40_WEIGHT   nornd, 16, 4
 
 INIT_XMM sse2
 RV40_WEIGHT   rnd,    8, 3

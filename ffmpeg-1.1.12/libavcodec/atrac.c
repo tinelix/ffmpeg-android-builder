@@ -1,7 +1,6 @@
 /*
- * common functions for the ATRAC family of decoders
- *
- * Copyright (c) 2006-2013 Maxim Poliakovski
+ * Atrac common functions
+ * Copyright (c) 2006-2008 Maxim Poliakovski
  * Copyright (c) 2006-2008 Benjamin Larsson
  *
  * This file is part of FFmpeg.
@@ -26,11 +25,12 @@
  */
 
 #include <math.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
-#include "libavutil/attributes.h"
-#include "libavutil/thread.h"
-
+#include "avcodec.h"
+#include "dsputil.h"
 #include "atrac.h"
 
 float ff_atrac_sf_table[64];
@@ -45,88 +45,42 @@ static const float qmf_48tap_half[24] = {
    -0.043596379,   -0.099384367,   0.13207909,    0.46424159
 };
 
-static av_cold void atrac_generate_tables(void)
-{
-    /* Generate scale factors */
-    for (int i = 0; i < 64; i++)
-        ff_atrac_sf_table[i] = pow(2.0, (i - 15) / 3.0);
+/**
+ * Generate common tables
+ */
 
-    /* Generate the QMF window. */
-    for (int i = 0; i < 24; i++) {
-        float s = qmf_48tap_half[i] * 2.0;
-        qmf_window[i] = qmf_window[47 - i] = s;
-    }
-}
-
-av_cold void ff_atrac_generate_tables(void)
-{
-    static AVOnce init_static_once = AV_ONCE_INIT;
-    ff_thread_once(&init_static_once, atrac_generate_tables);
-}
-
-av_cold void ff_atrac_init_gain_compensation(AtracGCContext *gctx, int id2exp_offset,
-                                             int loc_scale)
+void ff_atrac_generate_tables(void)
 {
     int i;
+    float s;
 
-    gctx->loc_scale     = loc_scale;
-    gctx->loc_size      = 1 << loc_scale;
-    gctx->id2exp_offset = id2exp_offset;
+    /* Generate scale factors */
+    if (!ff_atrac_sf_table[63])
+        for (i=0 ; i<64 ; i++)
+            ff_atrac_sf_table[i] = pow(2.0, (i - 15) / 3.0);
 
-    /* Generate gain level table. */
-    for (i = 0; i < 16; i++)
-        gctx->gain_tab1[i] = powf(2.0, id2exp_offset - i);
-
-    /* Generate gain interpolation table. */
-    for (i = -15; i < 16; i++)
-        gctx->gain_tab2[i + 15] = powf(2.0, -1.0f / gctx->loc_size * i);
-}
-
-void ff_atrac_gain_compensation(AtracGCContext *gctx, float *in, float *prev,
-                                AtracGainInfo *gc_now, AtracGainInfo *gc_next,
-                                int num_samples, float *out)
-{
-    float lev, gc_scale, gain_inc;
-    int i, pos, lastpos;
-
-    gc_scale = gc_next->num_points ? gctx->gain_tab1[gc_next->lev_code[0]]
-                                   : 1.0f;
-
-    if (!gc_now->num_points) {
-        for (pos = 0; pos < num_samples; pos++)
-            out[pos] = in[pos] * gc_scale + prev[pos];
-    } else {
-        pos = 0;
-
-        for (i = 0; i < gc_now->num_points; i++) {
-            lastpos = gc_now->loc_code[i] << gctx->loc_scale;
-
-            lev = gctx->gain_tab1[gc_now->lev_code[i]];
-            gain_inc = gctx->gain_tab2[(i + 1 < gc_now->num_points ? gc_now->lev_code[i + 1]
-                                                                   : gctx->id2exp_offset) -
-                                       gc_now->lev_code[i] + 15];
-
-            /* apply constant gain level and overlap */
-            for (; pos < lastpos; pos++)
-                out[pos] = (in[pos] * gc_scale + prev[pos]) * lev;
-
-            /* interpolate between two different gain levels */
-            for (; pos < lastpos + gctx->loc_size; pos++) {
-                out[pos] = (in[pos] * gc_scale + prev[pos]) * lev;
-                lev *= gain_inc;
-            }
+    /* Generate the QMF window. */
+    if (!qmf_window[47])
+        for (i=0 ; i<24; i++) {
+            s = qmf_48tap_half[i] * 2.0;
+            qmf_window[i] = qmf_window[47 - i] = s;
         }
-
-        for (; pos < num_samples; pos++)
-            out[pos] = in[pos] * gc_scale + prev[pos];
-    }
-
-    /* copy the overlapping part into the delay buffer */
-    memcpy(prev, &in[num_samples], num_samples * sizeof(float));
 }
 
-void ff_atrac_iqmf(float *inlo, float *inhi, unsigned int nIn, float *pOut,
-                   float *delayBuf, float *temp)
+
+/**
+ * Quadrature mirror synthesis filter.
+ *
+ * @param inlo      lower part of spectrum
+ * @param inhi      higher part of spectrum
+ * @param nIn       size of spectrum buffer
+ * @param pOut      out buffer
+ * @param delayBuf  delayBuf buffer
+ * @param temp      temp buffer
+ */
+
+
+void ff_atrac_iqmf (float *inlo, float *inhi, unsigned int nIn, float *pOut, float *delayBuf, float *temp)
 {
     int   i, j;
     float   *p1, *p3;

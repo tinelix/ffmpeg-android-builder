@@ -22,12 +22,8 @@
 #include <stdint.h>
 #include <sndio.h>
 
-#include "libavutil/internal.h"
-
-#include "libavformat/mux.h"
-
-#include "libavdevice/avdevice.h"
-#include "libavdevice/sndio.h"
+#include "avdevice.h"
+#include "sndio_common.h"
 
 static av_cold int audio_write_header(AVFormatContext *s1)
 {
@@ -36,10 +32,10 @@ static av_cold int audio_write_header(AVFormatContext *s1)
     int ret;
 
     st             = s1->streams[0];
-    s->sample_rate = st->codecpar->sample_rate;
-    s->channels    = st->codecpar->ch_layout.nb_channels;
+    s->sample_rate = st->codec->sample_rate;
+    s->channels    = st->codec->channels;
 
-    ret = ff_sndio_open(s1, 1, s1->url);
+    ret = ff_sndio_open(s1, 1, s1->filename);
 
     return ret;
 }
@@ -47,7 +43,7 @@ static av_cold int audio_write_header(AVFormatContext *s1)
 static int audio_write_packet(AVFormatContext *s1, AVPacket *pkt)
 {
     SndioData *s = s1->priv_data;
-    const uint8_t *buf = pkt->data;
+    uint8_t *buf= pkt->data;
     int size = pkt->size;
     int len, ret;
 
@@ -80,25 +76,17 @@ static int audio_write_trailer(AVFormatContext *s1)
     return 0;
 }
 
-static const AVClass sndio_muxer_class = {
-    .class_name     = "sndio outdev",
-    .item_name      = av_default_item_name,
-    .version        = LIBAVUTIL_VERSION_INT,
-    .category       = AV_CLASS_CATEGORY_DEVICE_AUDIO_OUTPUT,
-};
-
-const FFOutputFormat ff_sndio_muxer = {
-    .p.name         = "sndio",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("sndio audio playback"),
+AVOutputFormat ff_sndio_muxer = {
+    .name           = "sndio",
+    .long_name      = NULL_IF_CONFIG_SMALL("sndio audio playback"),
     .priv_data_size = sizeof(SndioData),
     /* XXX: we make the assumption that the soundcard accepts this format */
     /* XXX: find better solution with "preinit" method, needed also in
        other formats */
-    .p.audio_codec  = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE),
-    .p.video_codec  = AV_CODEC_ID_NONE,
+    .audio_codec    = AV_NE(AV_CODEC_ID_PCM_S16BE, AV_CODEC_ID_PCM_S16LE),
+    .video_codec    = AV_CODEC_ID_NONE,
     .write_header   = audio_write_header,
     .write_packet   = audio_write_packet,
     .write_trailer  = audio_write_trailer,
-    .p.flags        = AVFMT_NOFILE,
-    .p.priv_class   = &sndio_muxer_class,
+    .flags          = AVFMT_NOFILE,
 };

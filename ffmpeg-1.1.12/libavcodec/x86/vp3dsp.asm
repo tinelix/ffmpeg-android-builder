@@ -33,14 +33,12 @@ vp3_idct_data: times 8 dw 64277
                times 8 dw 25080
                times 8 dw 12785
 
-pb_7:  times 8 db 0x07
-pb_1F: times 8 db 0x1f
-pb_81: times 8 db 0x81
-
 cextern pb_1
 cextern pb_3
+cextern pb_7
+cextern pb_1F
 cextern pb_80
-cextern pb_FE
+cextern pb_81
 
 cextern pw_8
 
@@ -105,6 +103,9 @@ SECTION .text
 
 INIT_MMX mmxext
 cglobal vp3_v_loop_filter, 3, 4
+%if ARCH_X86_64
+    movsxd        r1, r1d
+%endif
     mov           r3, r1
     neg           r1
     movq          m6, [r0+r1*2]
@@ -119,6 +120,9 @@ cglobal vp3_v_loop_filter, 3, 4
     RET
 
 cglobal vp3_h_loop_filter, 3, 4
+%if ARCH_X86_64
+    movsxd        r1, r1d
+%endif
     lea           r3, [r1*3]
 
     movd          m6, [r0     -2]
@@ -140,49 +144,6 @@ cglobal vp3_h_loop_filter, 3, 4
     STORE_4_WORDS m4
     lea           r0, [r0+r1*4  ]
     STORE_4_WORDS m3
-    RET
-
-%macro PAVGB_NO_RND 0
-    mova   m4, m0
-    mova   m5, m2
-    pand   m4, m1
-    pand   m5, m3
-    pxor   m1, m0
-    pxor   m3, m2
-    pand   m1, m6
-    pand   m3, m6
-    psrlq  m1, 1
-    psrlq  m3, 1
-    paddb  m4, m1
-    paddb  m5, m3
-%endmacro
-
-INIT_MMX mmx
-cglobal put_vp_no_rnd_pixels8_l2, 5, 6, 0, dst, src1, src2, stride, h, stride3
-    mova   m6, [pb_FE]
-    lea    stride3q,[strideq+strideq*2]
-.loop:
-    mova   m0, [src1q]
-    mova   m1, [src2q]
-    mova   m2, [src1q+strideq]
-    mova   m3, [src2q+strideq]
-    PAVGB_NO_RND
-    mova   [dstq], m4
-    mova   [dstq+strideq], m5
-
-    mova   m0, [src1q+strideq*2]
-    mova   m1, [src2q+strideq*2]
-    mova   m2, [src1q+stride3q]
-    mova   m3, [src2q+stride3q]
-    PAVGB_NO_RND
-    mova   [dstq+strideq*2], m4
-    mova   [dstq+stride3q],  m5
-
-    lea    src1q, [src1q+strideq*4]
-    lea    src2q, [src2q+strideq*4]
-    lea    dstq,  [dstq+strideq*4]
-    sub    hd, 4
-    jnz .loop
     RET
 
 ; from original comments: The Macro does IDct on 4 1-D Dcts
@@ -539,22 +500,22 @@ cglobal put_vp_no_rnd_pixels8_l2, 5, 6, 0, dst, src1, src2, stride, h, stride3
 
     ; at this point, function has completed dequantization + dezigzag +
     ; partial transposition; now do the idct itself
-%define I(x) [%1+16*x]
-%define J(x) [%1+16*x]
-    RowIDCT
-    Transpose
-
-%define I(x) [%1+16*x+8]
-%define J(x) [%1+16*x+8]
-    RowIDCT
-    Transpose
-
-%define I(x) [%1+16* x]
+%define I(x) [%1+16* x     ]
 %define J(x) [%1+16*(x-4)+8]
-    ColumnIDCT
+    RowIDCT
+    Transpose
 
 %define I(x) [%1+16* x   +64]
 %define J(x) [%1+16*(x-4)+72]
+    RowIDCT
+    Transpose
+
+%define I(x) [%1+16*x]
+%define J(x) [%1+16*x]
+    ColumnIDCT
+
+%define I(x) [%1+16*x+8]
+%define J(x) [%1+16*x+8]
     ColumnIDCT
 %endif ; mmsize == 16/8
 %endmacro
@@ -563,6 +524,7 @@ cglobal put_vp_no_rnd_pixels8_l2, 5, 6, 0, dst, src1, src2, stride, h, stride3
 cglobal vp3_idct_put, 3, 4, 9
     VP3_IDCT      r2
 
+    movsxdifnidn  r1, r1d
     mova          m4, [pb_80]
     lea           r3, [r1*3]
 %assign %%i 0
@@ -580,64 +542,74 @@ cglobal vp3_idct_put, 3, 4, 9
     paddb         m2, m4
     paddb         m3, m4
     movq   [r0     ], m0
+%if mmsize == 8
+    movq   [r0+r1  ], m1
+    movq   [r0+r1*2], m2
+    movq   [r0+r3  ], m3
+%else
     movhps [r0+r1  ], m0
     movq   [r0+r1*2], m1
     movhps [r0+r3  ], m1
+%endif
 %if %%i == 0
     lea           r0, [r0+r1*4]
 %endif
+%if mmsize == 16
     movq   [r0     ], m2
     movhps [r0+r1  ], m2
     movq   [r0+r1*2], m3
     movhps [r0+r3  ], m3
-%assign %%i %%i+8
-%endrep
-
-    pxor          m0, m0
-%assign %%offset 0
-%rep 128/mmsize
-    mova [r2+%%offset], m0
-%assign %%offset %%offset+mmsize
+%endif
+%assign %%i %%i+64
 %endrep
     RET
 
 cglobal vp3_idct_add, 3, 4, 9
     VP3_IDCT      r2
 
-    lea           r3, [r1*3]
+    mov           r3, 4
     pxor          m4, m4
-%assign %%i 0
-%rep 2
+    movsxdifnidn  r1, r1d
+.loop:
     movq          m0, [r0]
     movq          m1, [r0+r1]
-    movq          m2, [r0+r1*2]
-    movq          m3, [r0+r3]
+%if mmsize == 8
+    mova          m2, m0
+    mova          m3, m1
+%endif
     punpcklbw     m0, m4
     punpcklbw     m1, m4
-    punpcklbw     m2, m4
-    punpcklbw     m3, m4
-    paddsw        m0, [r2+ 0+%%i]
-    paddsw        m1, [r2+16+%%i]
-    paddsw        m2, [r2+32+%%i]
-    paddsw        m3, [r2+48+%%i]
-    packuswb      m0, m1
-    packuswb      m2, m3
-    movq   [r0     ], m0
-    movhps [r0+r1  ], m0
-    movq   [r0+r1*2], m2
-    movhps [r0+r3  ], m2
-%if %%i == 0
-    lea           r0, [r0+r1*4]
+%if mmsize == 8
+    punpckhbw     m2, m4
+    punpckhbw     m3, m4
 %endif
-%assign %%i %%i+64
-%endrep
-%assign %%i 0
-%rep 128/mmsize
-    mova    [r2+%%i], m4
-%assign %%i %%i+mmsize
-%endrep
+    paddsw        m0, [r2+ 0]
+    paddsw        m1, [r2+16]
+%if mmsize == 8
+    paddsw        m2, [r2+ 8]
+    paddsw        m3, [r2+24]
+    packuswb      m0, m2
+    packuswb      m1, m3
+%else ; mmsize == 16
+    packuswb      m0, m1
+%endif
+    movq     [r0   ], m0
+%if mmsize == 8
+    movq     [r0+r1], m1
+%else ; mmsize == 16
+    movhps   [r0+r1], m0
+%endif
+    lea           r0, [r0+r1*2]
+    add           r2, 32
+    dec           r3
+    jg .loop
     RET
 %endmacro
+
+%if ARCH_X86_32
+INIT_MMX mmx
+vp3_idct_funcs
+%endif
 
 INIT_XMM sse2
 vp3_idct_funcs
@@ -648,7 +620,7 @@ vp3_idct_funcs
     paddusb       m2, m0
     movq          m4, [r0+r1*2]
     paddusb       m3, m0
-    movq          m5, [r0+r2  ]
+    movq          m5, [r0+r3  ]
     paddusb       m4, m0
     paddusb       m5, m0
     psubusb       m2, m1
@@ -658,17 +630,19 @@ vp3_idct_funcs
     movq   [r0+r1  ], m3
     psubusb       m5, m1
     movq   [r0+r1*2], m4
-    movq   [r0+r2  ], m5
+    movq   [r0+r3  ], m5
 %endmacro
 
 INIT_MMX mmxext
 cglobal vp3_idct_dc_add, 3, 4
-    movsx         r3, word [r2]
-    mov    word [r2], 0
-    lea           r2, [r1*3]
-    add           r3, 15
-    sar           r3, 5
-    movd          m0, r3d
+%if ARCH_X86_64
+    movsxd        r1, r1d
+%endif
+    lea           r3, [r1*3]
+    movsx         r2, word [r2]
+    add           r2, 15
+    sar           r2, 5
+    movd          m0, r2d
     pshufw        m0, m0, 0x0
     pxor          m1, m1
     psubw         m1, m0

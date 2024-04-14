@@ -19,26 +19,19 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "config_components.h"
-
 #include "libavutil/avstring.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mathematics.h"
-#include "libavutil/mem.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/time.h"
 #include "avformat.h"
-#include "demux.h"
 
 #include "internal.h"
 #include "network.h"
 #include "os_support.h"
-#include "rtpproto.h"
 #include "rtsp.h"
 #include "rdt.h"
-#include "tls.h"
 #include "url.h"
-#include "version.h"
 
 static const struct RTSPStatusMessage {
     enum RTSPStatusCode code;
@@ -102,7 +95,7 @@ static int rtsp_send_reply(AVFormatContext *s, enum RTSPStatusCode code,
                            const char *extracontent, uint16_t seq)
 {
     RTSPState *rt = s->priv_data;
-    char message[MAX_URL_SIZE];
+    char message[4096];
     int index = 0;
     while (status_messages[index].code) {
         if (status_messages[index].code == code) {
@@ -119,8 +112,8 @@ static int rtsp_send_reply(AVFormatContext *s, enum RTSPStatusCode code,
     if (extracontent)
         av_strlcat(message, extracontent, sizeof(message));
     av_strlcat(message, "\r\n", sizeof(message));
-    av_log(s, AV_LOG_TRACE, "Sending response:\n%s", message);
-    ffurl_write(rt->rtsp_hd_out, message, strlen(message));
+    av_dlog(s, "Sending response:\n%s", message);
+    ffurl_write(rt->rtsp_hd, message, strlen(message));
 
     return 0;
 }
@@ -148,15 +141,15 @@ static inline int rtsp_read_request(AVFormatContext *s,
                                     const char *method)
 {
     RTSPState *rt = s->priv_data;
-    char rbuf[MAX_URL_SIZE];
+    char rbuf[1024];
     int rbuflen, ret;
     do {
         ret = read_line(s, rbuf, sizeof(rbuf), &rbuflen);
         if (ret)
             return ret;
         if (rbuflen > 1) {
-            av_log(s, AV_LOG_TRACE, "Parsing[%d]: %s\n", rbuflen, rbuf);
-            ff_rtsp_parse_line(s, request, rbuf, rt, method);
+            av_dlog(s, "Parsing[%d]: %s\n", rbuflen, rbuf);
+            ff_rtsp_parse_line(request, rbuf, rt, method);
         }
     } while (rbuflen > 0);
     if (request->seq != rt->seq + 1) {
@@ -177,7 +170,7 @@ static int rtsp_read_announce(AVFormatContext *s)
 {
     RTSPState *rt             = s->priv_data;
     RTSPMessageHeader request = { 0 };
-    char *sdp;
+    char sdp[4096];
     int  ret;
 
     ret = rtsp_read_request(s, &request, "ANNOUNCE");
@@ -190,24 +183,18 @@ static int rtsp_read_announce(AVFormatContext *s)
         rtsp_send_reply(s, RTSP_STATUS_SERVICE, NULL, request.seq);
         return AVERROR_OPTION_NOT_FOUND;
     }
-    if (request.content_length) {
-        sdp = av_malloc(request.content_length + 1);
-        if (!sdp)
-            return AVERROR(ENOMEM);
-
+    if (request.content_length && request.content_length < sizeof(sdp) - 1) {
         /* Read SDP */
         if (ffurl_read_complete(rt->rtsp_hd, sdp, request.content_length)
             < request.content_length) {
             av_log(s, AV_LOG_ERROR,
                    "Unable to get complete SDP Description in ANNOUNCE\n");
             rtsp_send_reply(s, RTSP_STATUS_INTERNAL, NULL, request.seq);
-            av_free(sdp);
             return AVERROR(EIO);
         }
         sdp[request.content_length] = '\0';
         av_log(s, AV_LOG_VERBOSE, "SDP: %s\n", sdp);
         ret = ff_sdp_parse(s, sdp);
-        av_free(sdp);
         if (ret)
             return ret;
         rtsp_send_reply(s, RTSP_STATUS_OK, NULL, request.seq);
@@ -243,9 +230,9 @@ static int rtsp_read_setup(AVFormatContext *s, char* host, char *controlurl)
     RTSPState *rt             = s->priv_data;
     RTSPMessageHeader request = { 0 };
     int ret                   = 0;
-    char url[MAX_URL_SIZE];
+    char url[1024];
     RTSPStream *rtsp_st;
-    char responseheaders[MAX_URL_SIZE];
+    char responseheaders[1024];
     int localport    = -1;
     int transportidx = 0;
     int streamid     = 0;
@@ -285,17 +272,6 @@ static int rtsp_read_setup(AVFormatContext *s, char* host, char *controlurl)
     rtsp_st   = rt->rtsp_streams[streamid];
     localport = rt->rtp_port_min;
 
-    /* check if the stream has already been setup */
-    if (rtsp_st->transport_priv) {
-        if (CONFIG_RTPDEC && rt->transport == RTSP_TRANSPORT_RDT)
-            ff_rdt_parse_close(rtsp_st->transport_priv);
-        else if (CONFIG_RTPDEC && rt->transport == RTSP_TRANSPORT_RTP)
-            ff_rtp_parse_close(rtsp_st->transport_priv);
-        rtsp_st->transport_priv = NULL;
-    }
-    if (rtsp_st->rtp_handle)
-        ffurl_closep(&rtsp_st->rtp_handle);
-
     if (request.transports[0].lower_transport == RTSP_LOWER_TRANSPORT_TCP) {
         rt->lower_transport = RTSP_LOWER_TRANSPORT_TCP;
         if ((ret = ff_rtsp_open_transport_ctx(s, rtsp_st))) {
@@ -305,19 +281,15 @@ static int rtsp_read_setup(AVFormatContext *s, char* host, char *controlurl)
         rtsp_st->interleaved_min = request.transports[0].interleaved_min;
         rtsp_st->interleaved_max = request.transports[0].interleaved_max;
         snprintf(responseheaders, sizeof(responseheaders), "Transport: "
-                 "RTP/AVP/TCP;unicast;mode=record;interleaved=%d-%d"
+                 "RTP/AVP/TCP;unicast;mode=receive;interleaved=%d-%d"
                  "\r\n", request.transports[0].interleaved_min,
                  request.transports[0].interleaved_max);
     } else {
         do {
-            AVDictionary *opts = NULL;
-            av_dict_set_int(&opts, "buffer_size", rt->buffer_size, 0);
             ff_url_join(url, sizeof(url), "rtp", NULL, host, localport, NULL);
-            av_log(s, AV_LOG_TRACE, "Opening: %s\n", url);
-            ret = ffurl_open_whitelist(&rtsp_st->rtp_handle, url, AVIO_FLAG_READ_WRITE,
-                                       &s->interrupt_callback, &opts,
-                                       s->protocol_whitelist, s->protocol_blacklist, NULL);
-            av_dict_free(&opts);
+            av_dlog(s, "Opening: %s", url);
+            ret = ffurl_open(&rtsp_st->rtp_handle, url, AVIO_FLAG_READ_WRITE,
+                             &s->interrupt_callback, NULL);
             if (ret)
                 localport += 2;
         } while (ret || localport > rt->rtp_port_max);
@@ -326,7 +298,7 @@ static int rtsp_read_setup(AVFormatContext *s, char* host, char *controlurl)
             return ret;
         }
 
-        av_log(s, AV_LOG_TRACE, "Listening on: %d\n",
+        av_dlog(s, "Listening on: %d",
                 ff_rtp_get_local_rtp_port(rtsp_st->rtp_handle));
         if ((ret = ff_rtsp_open_transport_ctx(s, rtsp_st))) {
             rtsp_send_reply(s, RTSP_STATUS_TRANSPORT, NULL, request.seq);
@@ -335,7 +307,7 @@ static int rtsp_read_setup(AVFormatContext *s, char* host, char *controlurl)
 
         localport = ff_rtp_get_local_rtp_port(rtsp_st->rtp_handle);
         snprintf(responseheaders, sizeof(responseheaders), "Transport: "
-                 "RTP/AVP/UDP;unicast;mode=record;source=%s;"
+                 "RTP/AVP/UDP;unicast;mode=receive;source=%s;"
                  "client_port=%d-%d;server_port=%d-%d\r\n",
                  host, request.transports[0].client_port_min,
                  request.transports[0].client_port_max, localport,
@@ -362,7 +334,7 @@ static int rtsp_read_record(AVFormatContext *s)
     RTSPState *rt             = s->priv_data;
     RTSPMessageHeader request = { 0 };
     int ret                   = 0;
-    char responseheaders[MAX_URL_SIZE];
+    char responseheaders[1024];
 
     ret = rtsp_read_request(s, &request, "RECORD");
     if (ret)
@@ -387,12 +359,6 @@ static inline int parse_command_line(AVFormatContext *s, const char *line,
     RTSPState *rt = s->priv_data;
     const char *linept, *searchlinept;
     linept = strchr(line, ' ');
-
-    if (!linept) {
-        av_log(s, AV_LOG_ERROR, "Error parsing method string\n");
-        return AVERROR_INVALIDDATA;
-    }
-
     if (linept - line > methodsize - 1) {
         av_log(s, AV_LOG_ERROR, "Method string too long\n");
         return AVERROR(EIO);
@@ -441,7 +407,7 @@ static inline int parse_command_line(AVFormatContext *s, const char *line,
     }
 
     searchlinept = strchr(linept, ' ');
-    if (!searchlinept) {
+    if (searchlinept == NULL) {
         av_log(s, AV_LOG_ERROR, "Error parsing message URI\n");
         return AVERROR_INVALIDDATA;
     }
@@ -485,7 +451,7 @@ static inline int parse_command_line(AVFormatContext *s, const char *line,
 int ff_rtsp_parse_streaming_commands(AVFormatContext *s)
 {
     RTSPState *rt = s->priv_data;
-    unsigned char rbuf[MAX_URL_SIZE];
+    unsigned char rbuf[4096];
     unsigned char method[10];
     char uri[500];
     int ret;
@@ -496,7 +462,6 @@ int ff_rtsp_parse_streaming_commands(AVFormatContext *s)
     ret = read_line(s, rbuf, sizeof(rbuf), &rbuflen);
     if (ret < 0)
         return ret;
-    av_log(s, AV_LOG_TRACE, "Parsing[%d]: %s\n", rbuflen, rbuf);
     ret = parse_command_line(s, rbuf, rbuflen, uri, sizeof(uri), method,
                              sizeof(method), &methodcode);
     if (ret) {
@@ -519,6 +484,7 @@ int ff_rtsp_parse_streaming_commands(AVFormatContext *s)
     } else if (methodcode == TEARDOWN) {
         rt->state = RTSP_STATE_IDLE;
         ret       = rtsp_send_reply(s, RTSP_STATUS_OK, NULL , request.seq);
+        return 0;
     }
     return ret;
 }
@@ -528,23 +494,11 @@ static int rtsp_read_play(AVFormatContext *s)
     RTSPState *rt = s->priv_data;
     RTSPMessageHeader reply1, *reply = &reply1;
     int i;
-    char cmd[MAX_URL_SIZE];
+    char cmd[1024];
 
     av_log(s, AV_LOG_DEBUG, "hello state=%d\n", rt->state);
     rt->nb_byes = 0;
 
-    if (rt->lower_transport == RTSP_LOWER_TRANSPORT_UDP) {
-        for (i = 0; i < rt->nb_rtsp_streams; i++) {
-            RTSPStream *rtsp_st = rt->rtsp_streams[i];
-            /* Try to initialize the connection state in a
-             * potential NAT router by sending dummy packets.
-             * RTP/RTCP dummy packets are used for RDT, too.
-             */
-            if (rtsp_st->rtp_handle &&
-                !(rt->server_type == RTSP_SERVER_WMS && i > 1))
-                ff_rtp_send_punch_packets(rtsp_st->rtp_handle);
-        }
-    }
     if (!(rt->server_type == RTSP_SERVER_REAL && rt->need_subscription)) {
         if (rt->transport == RTSP_TRANSPORT_RTP) {
             for (i = 0; i < rt->nb_rtsp_streams; i++) {
@@ -571,7 +525,7 @@ static int rtsp_read_play(AVFormatContext *s)
         }
         ff_rtsp_send_cmd(s, "PLAY", rt->control_uri, cmd, reply, NULL);
         if (reply->status_code != RTSP_STATUS_OK) {
-            return ff_rtsp_averror(reply->status_code, -1);
+            return -1;
         }
         if (rt->transport == RTSP_TRANSPORT_RTP &&
             reply->range_start != AV_NOPTS_VALUE) {
@@ -581,7 +535,6 @@ static int rtsp_read_play(AVFormatContext *s)
                 AVStream *st = NULL;
                 if (!rtpctx || rtsp_st->stream_index < 0)
                     continue;
-
                 st = s->streams[rtsp_st->stream_index];
                 rtpctx->range_start_offset =
                     av_rescale_q(reply->range_start, AV_TIME_BASE_Q,
@@ -604,7 +557,7 @@ static int rtsp_read_pause(AVFormatContext *s)
     else if (!(rt->server_type == RTSP_SERVER_REAL && rt->need_subscription)) {
         ff_rtsp_send_cmd(s, "PAUSE", rt->control_uri, NULL, reply, NULL);
         if (reply->status_code != RTSP_STATUS_OK) {
-            return ff_rtsp_averror(reply->status_code, -1);
+            return -1;
         }
     }
     rt->state = RTSP_STATE_PAUSED;
@@ -614,7 +567,7 @@ static int rtsp_read_pause(AVFormatContext *s)
 int ff_rtsp_setup_input_streams(AVFormatContext *s, RTSPMessageHeader *reply)
 {
     RTSPState *rt = s->priv_data;
-    char cmd[MAX_URL_SIZE];
+    char cmd[1024];
     unsigned char *content = NULL;
     int ret;
 
@@ -631,12 +584,12 @@ int ff_rtsp_setup_input_streams(AVFormatContext *s, RTSPMessageHeader *reply)
                    sizeof(cmd));
     }
     ff_rtsp_send_cmd(s, "DESCRIBE", rt->control_uri, cmd, reply, &content);
-    if (reply->status_code != RTSP_STATUS_OK) {
-        av_freep(&content);
-        return ff_rtsp_averror(reply->status_code, AVERROR_INVALIDDATA);
-    }
     if (!content)
         return AVERROR_INVALIDDATA;
+    if (reply->status_code != RTSP_STATUS_OK) {
+        av_freep(&content);
+        return AVERROR_INVALIDDATA;
+    }
 
     av_log(s, AV_LOG_VERBOSE, "SDP:\n%s\n", content);
     /* now we got the SDP description, we parse it */
@@ -651,59 +604,47 @@ int ff_rtsp_setup_input_streams(AVFormatContext *s, RTSPMessageHeader *reply)
 static int rtsp_listen(AVFormatContext *s)
 {
     RTSPState *rt = s->priv_data;
-    char proto[128], host[128], path[512], auth[128];
+    char host[128], path[512], auth[128];
     char uri[500];
     int port;
-    int default_port = RTSP_DEFAULT_PORT;
     char tcpname[500];
-    const char *lower_proto = "tcp";
-    unsigned char rbuf[MAX_URL_SIZE];
+    unsigned char rbuf[4096];
     unsigned char method[10];
     int rbuflen = 0;
     int ret;
     enum RTSPMethod methodcode;
 
-    if (!ff_network_init())
-        return AVERROR(EIO);
-
     /* extract hostname and port */
-    av_url_split(proto, sizeof(proto), auth, sizeof(auth), host, sizeof(host),
-                 &port, path, sizeof(path), s->url);
+    av_url_split(NULL, 0, auth, sizeof(auth), host, sizeof(host), &port,
+                 path, sizeof(path), s->filename);
 
     /* ff_url_join. No authorization by now (NULL) */
-    ff_url_join(rt->control_uri, sizeof(rt->control_uri), proto, NULL, host,
+    ff_url_join(rt->control_uri, sizeof(rt->control_uri), "rtsp", NULL, host,
                 port, "%s", path);
 
-    if (!strcmp(proto, "rtsps")) {
-        lower_proto  = "tls";
-        default_port = RTSPS_DEFAULT_PORT;
-    }
-
     if (port < 0)
-        port = default_port;
+        port = RTSP_DEFAULT_PORT;
 
     /* Create TCP connection */
-    ff_url_join(tcpname, sizeof(tcpname), lower_proto, NULL, host, port,
+    ff_url_join(tcpname, sizeof(tcpname), "tcp", NULL, host, port,
                 "?listen&listen_timeout=%d", rt->initial_timeout * 1000);
 
-    if (ret = ffurl_open_whitelist(&rt->rtsp_hd, tcpname, AVIO_FLAG_READ_WRITE,
-                                   &s->interrupt_callback, NULL,
-                                   s->protocol_whitelist, s->protocol_blacklist, NULL)) {
+    if (ret = ffurl_open(&rt->rtsp_hd, tcpname, AVIO_FLAG_READ_WRITE,
+                         &s->interrupt_callback, NULL)) {
         av_log(s, AV_LOG_ERROR, "Unable to open RTSP for listening\n");
-        goto fail;
+        return ret;
     }
     rt->state       = RTSP_STATE_IDLE;
     rt->rtsp_hd_out = rt->rtsp_hd;
     for (;;) { /* Wait for incoming RTSP messages */
         ret = read_line(s, rbuf, sizeof(rbuf), &rbuflen);
         if (ret < 0)
-            goto fail;
-        av_log(s, AV_LOG_TRACE, "Parsing[%d]: %s\n", rbuflen, rbuf);
+            return ret;
         ret = parse_command_line(s, rbuf, rbuflen, uri, sizeof(uri), method,
                                  sizeof(method), &methodcode);
         if (ret) {
             av_log(s, AV_LOG_ERROR, "RTSP: Unexpected Command\n");
-            goto fail;
+            return ret;
         }
 
         if (methodcode == ANNOUNCE) {
@@ -718,25 +659,16 @@ static int rtsp_listen(AVFormatContext *s)
         } else if (methodcode == SETUP)
             ret = rtsp_read_setup(s, host, uri);
         if (ret) {
-            ret = AVERROR_INVALIDDATA;
-            goto fail;
+            ffurl_close(rt->rtsp_hd);
+            return AVERROR_INVALIDDATA;
         }
     }
-fail:
-    ff_rtsp_close_streams(s);
-    ff_rtsp_close_connections(s);
-    ff_network_close();
-    return ret;
+    return 0;
 }
 
-static int rtsp_probe(const AVProbeData *p)
+static int rtsp_probe(AVProbeData *p)
 {
-    if (
-#if CONFIG_TLS_PROTOCOL
-        av_strstart(p->filename, "rtsps:", NULL) ||
-#endif
-        av_strstart(p->filename, "satip:", NULL) ||
-        av_strstart(p->filename, "rtsp:", NULL))
+    if (av_strstart(p->filename, "rtsp:", NULL))
         return AVPROBE_SCORE_MAX;
     return 0;
 }
@@ -759,27 +691,23 @@ static int rtsp_read_header(AVFormatContext *s)
             return ret;
 
         rt->real_setup_cache = !s->nb_streams ? NULL :
-            av_calloc(s->nb_streams, 2 * sizeof(*rt->real_setup_cache));
-        if (!rt->real_setup_cache && s->nb_streams) {
-            ret = AVERROR(ENOMEM);
-            goto fail;
-        }
+            av_mallocz(2 * s->nb_streams * sizeof(*rt->real_setup_cache));
+        if (!rt->real_setup_cache && s->nb_streams)
+            return AVERROR(ENOMEM);
         rt->real_setup = rt->real_setup_cache + s->nb_streams;
 
         if (rt->initial_pause) {
             /* do not start immediately */
         } else {
-            ret = rtsp_read_play(s);
-            if (ret < 0)
-                goto fail;
+            if (rtsp_read_play(s) < 0) {
+                ff_rtsp_close_streams(s);
+                ff_rtsp_close_connections(s);
+                return AVERROR_INVALIDDATA;
+            }
         }
     }
 
     return 0;
-
-fail:
-    rtsp_read_close(s);
-    return ret;
 }
 
 int ff_rtsp_tcp_read_packet(AVFormatContext *s, RTSPStream **prtsp_st,
@@ -789,7 +717,7 @@ int ff_rtsp_tcp_read_packet(AVFormatContext *s, RTSPStream **prtsp_st,
     int id, len, i, ret;
     RTSPStream *rtsp_st;
 
-    av_log(s, AV_LOG_TRACE, "tcp_read_packet:\n");
+    av_dlog(s, "tcp_read_packet:\n");
 redo:
     for (;;) {
         RTSPMessageHeader reply;
@@ -805,19 +733,19 @@ redo:
     }
     ret = ffurl_read_complete(rt->rtsp_hd, buf, 3);
     if (ret != 3)
-        return AVERROR(EIO);
+        return -1;
     id  = buf[0];
     len = AV_RB16(buf + 1);
-    av_log(s, AV_LOG_TRACE, "id=%d len=%d\n", id, len);
+    av_dlog(s, "id=%d len=%d\n", id, len);
     if (len > buf_size || len < 8)
         goto redo;
     /* get the data */
     ret = ffurl_read_complete(rt->rtsp_hd, buf, len);
     if (ret != len)
-        return AVERROR(EIO);
+        return -1;
     if (rt->transport == RTSP_TRANSPORT_RDT &&
-        (ret = ff_rdt_parse_header(buf, len, &id, NULL, NULL, NULL, NULL)) < 0)
-        return ret;
+        ff_rdt_parse_header(buf, len, &id, NULL, NULL, NULL, NULL) < 0)
+        return -1;
 
     /* find the matching stream */
     for (i = 0; i < rt->nb_rtsp_streams; i++) {
@@ -839,8 +767,8 @@ static int resetup_tcp(AVFormatContext *s)
     int port;
 
     av_url_split(NULL, 0, NULL, 0, host, sizeof(host), &port, NULL, 0,
-                 s->url);
-    ff_rtsp_undo_setup(s, 0);
+                 s->filename);
+    ff_rtsp_undo_setup(s);
     return ff_rtsp_make_setup_request(s, host, port, RTSP_LOWER_TRANSPORT_TCP,
                                       rt->real_challenge);
 }
@@ -850,7 +778,7 @@ static int rtsp_read_packet(AVFormatContext *s, AVPacket *pkt)
     RTSPState *rt = s->priv_data;
     int ret;
     RTSPMessageHeader reply1, *reply = &reply1;
-    char cmd[MAX_URL_SIZE];
+    char cmd[1024];
 
 retry:
     if (rt->server_type == RTSP_SERVER_REAL) {
@@ -868,7 +796,7 @@ retry:
                 ff_rtsp_send_cmd(s, "SET_PARAMETER", rt->control_uri,
                                  cmd, reply, NULL);
                 if (reply->status_code != RTSP_STATUS_OK)
-                    return ff_rtsp_averror(reply->status_code, AVERROR_INVALIDDATA);
+                    return AVERROR_INVALIDDATA;
                 rt->need_subscription = 1;
             }
         }
@@ -903,7 +831,7 @@ retry:
             ff_rtsp_send_cmd(s, "SET_PARAMETER", rt->control_uri,
                              cmd, reply, NULL);
             if (reply->status_code != RTSP_STATUS_OK)
-                return ff_rtsp_averror(reply->status_code, AVERROR_INVALIDDATA);
+                return AVERROR_INVALIDDATA;
             rt->need_subscription = 0;
 
             if (rt->state == RTSP_STATE_STREAMING)
@@ -941,14 +869,14 @@ retry:
 
     if (!(rt->rtsp_flags & RTSP_FLAG_LISTEN)) {
         /* send dummy request to keep TCP connection alive */
-        if ((av_gettime_relative() - rt->last_cmd_time) / 1000000 >= rt->timeout / 2 ||
+        if ((av_gettime() - rt->last_cmd_time) / 1000000 >= rt->timeout / 2 ||
             rt->auth_state.stale) {
             if (rt->server_type == RTSP_SERVER_WMS ||
                 (rt->server_type != RTSP_SERVER_REAL &&
                  rt->get_parameter_supported)) {
                 ff_rtsp_send_cmd_async(s, "GET_PARAMETER", rt->control_uri, NULL);
             } else {
-                ff_rtsp_send_cmd_async(s, "OPTIONS", rt->control_uri, NULL);
+                ff_rtsp_send_cmd_async(s, "OPTIONS", "*", NULL);
             }
             /* The stale flag should be reset when creating the auth response in
              * ff_rtsp_send_cmd_async, but reset it here just in case we never
@@ -964,7 +892,6 @@ static int rtsp_read_seek(AVFormatContext *s, int stream_index,
                           int64_t timestamp, int flags)
 {
     RTSPState *rt = s->priv_data;
-    int ret;
 
     rt->seek_timestamp = av_rescale_q(timestamp,
                                       s->streams[stream_index]->time_base,
@@ -974,11 +901,11 @@ static int rtsp_read_seek(AVFormatContext *s, int stream_index,
     case RTSP_STATE_IDLE:
         break;
     case RTSP_STATE_STREAMING:
-        if ((ret = rtsp_read_pause(s)) != 0)
-            return ret;
+        if (rtsp_read_pause(s) != 0)
+            return -1;
         rt->state = RTSP_STATE_SEEKING;
-        if ((ret = rtsp_read_play(s)) != 0)
-            return ret;
+        if (rtsp_read_play(s) != 0)
+            return -1;
         break;
     case RTSP_STATE_PAUSED:
         rt->state = RTSP_STATE_IDLE;
@@ -994,17 +921,17 @@ static const AVClass rtsp_demuxer_class = {
     .version        = LIBAVUTIL_VERSION_INT,
 };
 
-const FFInputFormat ff_rtsp_demuxer = {
-    .p.name         = "rtsp",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("RTSP input"),
-    .p.flags        = AVFMT_NOFILE,
-    .p.priv_class   = &rtsp_demuxer_class,
+AVInputFormat ff_rtsp_demuxer = {
+    .name           = "rtsp",
+    .long_name      = NULL_IF_CONFIG_SMALL("RTSP input"),
     .priv_data_size = sizeof(RTSPState),
     .read_probe     = rtsp_probe,
     .read_header    = rtsp_read_header,
     .read_packet    = rtsp_read_packet,
     .read_close     = rtsp_read_close,
     .read_seek      = rtsp_read_seek,
+    .flags          = AVFMT_NOFILE,
     .read_play      = rtsp_read_play,
     .read_pause     = rtsp_read_pause,
+    .priv_class     = &rtsp_demuxer_class,
 };

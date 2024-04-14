@@ -28,54 +28,70 @@
 
 #include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
-#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
-#include "video.h"
 
-typedef struct KerndeintContext {
+typedef struct {
     const AVClass *class;
     int           frame; ///< frame count, starting from 0
     int           thresh, map, order, sharp, twoway;
     int           vsub;
-    int           is_packed_rgb;
-    uint8_t       *tmp_data    [4];  ///< temporary plane data buffer
-    int            tmp_linesize[4];  ///< temporary plane byte linesize
-    int            tmp_bwidth  [4];  ///< temporary plane byte width
+    uint8_t       *tmp_data [4];  ///< temporary plane data buffer
+    int           tmp_bwidth[4];  ///< temporary plane byte width
 } KerndeintContext;
 
 #define OFFSET(x) offsetof(KerndeintContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
 static const AVOption kerndeint_options[] = {
     { "thresh", "set the threshold", OFFSET(thresh), AV_OPT_TYPE_INT, {.i64=10}, 0, 255, FLAGS },
-    { "map",    "set the map",    OFFSET(map),    AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS },
-    { "order",  "set the order",  OFFSET(order),  AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS },
-    { "sharp",  "set sharpening", OFFSET(sharp),  AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS },
-    { "twoway", "set twoway",     OFFSET(twoway), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS },
+    { "map",    "set the map", OFFSET(map), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS },
+    { "order",  "set the order", OFFSET(order), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS },
+    { "sharp",  "enable sharpening", OFFSET(sharp), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS },
+    { "twoway", "enable twoway", OFFSET(twoway), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS },
     { NULL }
 };
 
 AVFILTER_DEFINE_CLASS(kerndeint);
 
+static av_cold int init(AVFilterContext *ctx, const char *args)
+{
+    KerndeintContext *kerndeint = ctx->priv;
+    const char const * shorthand[] = { "thresh", "map", "order", "sharp", "twoway", NULL };
+
+    kerndeint->class = &kerndeint_class;
+    av_opt_set_defaults(kerndeint);
+
+    return av_opt_set_from_string(kerndeint, args, shorthand, "=", ":");
+}
+
 static av_cold void uninit(AVFilterContext *ctx)
 {
     KerndeintContext *kerndeint = ctx->priv;
 
-    av_freep(&kerndeint->tmp_data[0]);
+    av_free(kerndeint->tmp_data[0]);
+    av_opt_free(kerndeint);
 }
 
-static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV420P,
-    AV_PIX_FMT_YUYV422,
-    AV_PIX_FMT_ARGB, AV_PIX_FMT_0RGB,
-    AV_PIX_FMT_ABGR, AV_PIX_FMT_0BGR,
-    AV_PIX_FMT_RGBA, AV_PIX_FMT_RGB0,
-    AV_PIX_FMT_BGRA, AV_PIX_FMT_BGR0,
-    AV_PIX_FMT_NONE
-};
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum PixelFormat pix_fmts[] = {
+        AV_PIX_FMT_YUV420P,
+        AV_PIX_FMT_YUYV422,
+        AV_PIX_FMT_ARGB, AV_PIX_FMT_0RGB,
+        AV_PIX_FMT_ABGR, AV_PIX_FMT_0BGR,
+        AV_PIX_FMT_RGBA, AV_PIX_FMT_RGB0,
+        AV_PIX_FMT_BGRA, AV_PIX_FMT_BGR0,
+        AV_PIX_FMT_NONE
+    };
+
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
+
+    return 0;
+}
 
 static int config_props(AVFilterLink *inlink)
 {
@@ -83,26 +99,21 @@ static int config_props(AVFilterLink *inlink)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
     int ret;
 
-    kerndeint->is_packed_rgb = av_pix_fmt_desc_get(inlink->format)->flags & AV_PIX_FMT_FLAG_RGB;
     kerndeint->vsub = desc->log2_chroma_h;
 
-    ret = av_image_alloc(kerndeint->tmp_data, kerndeint->tmp_linesize,
-                         inlink->w, inlink->h, inlink->format, 16);
+    ret = av_image_alloc(kerndeint->tmp_data, kerndeint->tmp_bwidth,
+                          inlink->w, inlink->h, inlink->format, 1);
     if (ret < 0)
         return ret;
     memset(kerndeint->tmp_data[0], 0, ret);
-
-    if ((ret = av_image_fill_linesizes(kerndeint->tmp_bwidth, inlink->format, inlink->w)) < 0)
-        return ret;
-
     return 0;
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *inpic)
+static int filter_frame(AVFilterLink *inlink, AVFilterBufferRef *inpic)
 {
     KerndeintContext *kerndeint = inlink->dst->priv;
     AVFilterLink *outlink = inlink->dst->outputs[0];
-    AVFrame *outpic;
+    AVFilterBufferRef *outpic;
     const uint8_t *prvp;   ///< Previous field's pixel line number n
     const uint8_t *prvpp;  ///< Previous field's pixel line number (n - 1)
     const uint8_t *prvpn;  ///< Previous field's pixel line number (n + 1)
@@ -134,29 +145,24 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *inpic)
     const int sharp  = kerndeint->sharp;
     const int twoway = kerndeint->twoway;
 
-    const int is_packed_rgb = kerndeint->is_packed_rgb;
+    const int is_packed_rgb = av_pix_fmt_desc_get(inlink->format)->flags & PIX_FMT_RGB;
 
-    outpic = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    outpic = ff_get_video_buffer(outlink, AV_PERM_WRITE|AV_PERM_ALIGN, outlink->w, outlink->h);
     if (!outpic) {
-        av_frame_free(&inpic);
+        avfilter_unref_bufferp(&inpic);
         return AVERROR(ENOMEM);
     }
-    av_frame_copy_props(outpic, inpic);
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
-    outpic->interlaced_frame = 0;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-    outpic->flags &= ~AV_FRAME_FLAG_INTERLACED;
+    avfilter_copy_buffer_ref_props(outpic, inpic);
+    outpic->video->interlaced = 0;
 
-    for (plane = 0; plane < 4 && inpic->data[plane] && inpic->linesize[plane]; plane++) {
-        h = plane == 0 ? inlink->h : AV_CEIL_RSHIFT(inlink->h, kerndeint->vsub);
+    for (plane = 0; inpic->data[plane] && plane < 4; plane++) {
+        h = plane == 0 ? inlink->h : inlink->h >> kerndeint->vsub;
         bwidth = kerndeint->tmp_bwidth[plane];
 
-        srcp_saved        = inpic->data[plane];
+        srcp = srcp_saved = inpic->data[plane];
         src_linesize      = inpic->linesize[plane];
-        psrc_linesize     = kerndeint->tmp_linesize[plane];
-        dstp_saved        = outpic->data[plane];
+        psrc_linesize     = kerndeint->tmp_bwidth[plane];
+        dstp = dstp_saved = outpic->data[plane];
         dst_linesize      = outpic->linesize[plane];
         srcp              = srcp_saved + (1 - order) * src_linesize;
         dstp              = dstp_saved + (1 - order) * dst_linesize;
@@ -282,7 +288,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         av_image_copy_plane(dstp, psrc_linesize, srcp, src_linesize, bwidth, h);
     }
 
-    av_frame_free(&inpic);
+    avfilter_unref_buffer(inpic);
     return ff_filter_frame(outlink, outpic);
 }
 
@@ -292,17 +298,29 @@ static const AVFilterPad kerndeint_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
         .config_props = config_props,
+        .min_perms    = AV_PERM_READ,
     },
+    { NULL }
 };
 
+static const AVFilterPad kerndeint_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
 
-const AVFilter ff_vf_kerndeint = {
+AVFilter avfilter_vf_kerndeint = {
     .name          = "kerndeint",
     .description   = NULL_IF_CONFIG_SMALL("Apply kernel deinterlacing to the input."),
     .priv_size     = sizeof(KerndeintContext),
-    .priv_class    = &kerndeint_class,
+    .init          = init,
     .uninit        = uninit,
-    FILTER_INPUTS(kerndeint_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_PIXFMTS_ARRAY(pix_fmts),
+    .query_formats = query_formats,
+
+    .inputs        = kerndeint_inputs,
+    .outputs       = kerndeint_outputs,
+
+    .priv_class = &kerndeint_class,
 };

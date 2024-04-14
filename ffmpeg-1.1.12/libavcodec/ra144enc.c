@@ -27,21 +27,22 @@
 
 #include <float.h>
 
-#include "libavutil/channel_layout.h"
 #include "avcodec.h"
 #include "audio_frame_queue.h"
-#include "celp_filters.h"
-#include "codec_internal.h"
-#include "encode.h"
-#include "mathops.h"
+#include "internal.h"
 #include "put_bits.h"
+#include "celp_filters.h"
 #include "ra144.h"
+
 
 static av_cold int ra144_encode_close(AVCodecContext *avctx)
 {
     RA144Context *ractx = avctx->priv_data;
     ff_lpc_end(&ractx->lpc_ctx);
     ff_af_queue_close(&ractx->afq);
+#if FF_API_OLD_ENCODE_AUDIO
+    av_freep(&avctx->coded_frame);
+#endif
     return 0;
 }
 
@@ -51,22 +52,37 @@ static av_cold int ra144_encode_init(AVCodecContext * avctx)
     RA144Context *ractx;
     int ret;
 
+    if (avctx->channels != 1) {
+        av_log(avctx, AV_LOG_ERROR, "invalid number of channels: %d\n",
+               avctx->channels);
+        return -1;
+    }
     avctx->frame_size = NBLOCKS * BLOCKSIZE;
-    avctx->initial_padding = avctx->frame_size;
+    avctx->delay      = avctx->frame_size;
     avctx->bit_rate = 8000;
     ractx = avctx->priv_data;
     ractx->lpc_coef[0] = ractx->lpc_tables[0];
     ractx->lpc_coef[1] = ractx->lpc_tables[1];
     ractx->avctx = avctx;
-    ff_audiodsp_init(&ractx->adsp);
     ret = ff_lpc_init(&ractx->lpc_ctx, avctx->frame_size, LPC_ORDER,
                       FF_LPC_TYPE_LEVINSON);
     if (ret < 0)
-        return ret;
+        goto error;
 
     ff_af_queue_init(avctx, &ractx->afq);
 
+#if FF_API_OLD_ENCODE_AUDIO
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame) {
+        ret = AVERROR(ENOMEM);
+        goto error;
+    }
+#endif
+
     return 0;
+error:
+    ra144_encode_close(avctx);
+    return ret;
 }
 
 
@@ -122,7 +138,7 @@ static void orthogonalize(float *v, const float *u)
 
 /**
  * Calculate match score and gain of an LPC-filtered vector with respect to
- * input data, possibly orthogonalizing it to up to two other vectors.
+ * input data, possibly othogonalizing it to up to 2 other vectors
  *
  * @param work array used to calculate the filtered vector
  * @param coefs coefficients of the LPC filter
@@ -192,8 +208,8 @@ static void create_adapt_vect(float *vect, const int16_t *cb, int lag)
 static int adaptive_cb_search(const int16_t *adapt_cb, float *work,
                               const float *coefs, float *data)
 {
-    int i, av_uninit(best_vect);
-    float score, gain, best_score, av_uninit(best_gain);
+    int i, best_vect;
+    float score, gain, best_score, best_gain;
     float exc[BLOCKSIZE];
 
     gain = best_score = 0;
@@ -223,8 +239,8 @@ static int adaptive_cb_search(const int16_t *adapt_cb, float *work,
 
 /**
  * Find the best vector of a fixed codebook by applying an LPC filter to
- * codebook entries, possibly orthogonalizing them to up to two other vectors
- * and matching the results with input data.
+ * codebook entries, possibly othogonalizing them to up to 2 other vectors and
+ * matching the results with input data
  *
  * @param work array used to calculate the filtered vectors
  * @param coefs coefficients of the LPC filter
@@ -329,6 +345,7 @@ static void ra144_encode_subblock(RA144Context *ractx,
     float data[BLOCKSIZE] = { 0 }, work[LPC_ORDER + BLOCKSIZE];
     float coefs[LPC_ORDER];
     float zero[BLOCKSIZE], cba[BLOCKSIZE], cb1[BLOCKSIZE], cb2[BLOCKSIZE];
+    int16_t cba_vect[BLOCKSIZE];
     int cba_idx, cb1_idx, cb2_idx, gain;
     int i, n;
     unsigned m[3];
@@ -367,8 +384,8 @@ static void ra144_encode_subblock(RA144Context *ractx,
          */
         memcpy(cba, work + LPC_ORDER, sizeof(cba));
 
-        ff_copy_and_dup(ractx->buffer_a, ractx->adapt_cb, cba_idx + BLOCKSIZE / 2 - 1);
-        m[0] = (ff_irms(&ractx->adsp, ractx->buffer_a) * rms) >> 12;
+        ff_copy_and_dup(cba_vect, ractx->adapt_cb, cba_idx + BLOCKSIZE / 2 - 1);
+        m[0] = (ff_irms(cba_vect) * rms) >> 12;
     }
     fixed_cb_search(work + LPC_ORDER, coefs, data, cba_idx, &cb1_idx, &cb2_idx);
     for (i = 0; i < BLOCKSIZE; i++) {
@@ -441,7 +458,7 @@ static int ra144_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     if (ractx->last_frame)
         return 0;
 
-    if ((ret = ff_get_encode_buffer(avctx, avpkt, FRAME_SIZE, 0)) < 0)
+    if ((ret = ff_alloc_packet2(avctx, avpkt, FRAMESIZE)))
         return ret;
 
     /**
@@ -469,10 +486,10 @@ static int ra144_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
 
     ff_lpc_calc_coefs(&ractx->lpc_ctx, lpc_data, NBLOCKS * BLOCKSIZE, LPC_ORDER,
                       LPC_ORDER, 16, lpc_coefs, shift, FF_LPC_TYPE_LEVINSON,
-                      0, ORDER_METHOD_EST, 0, 12, 0);
+                      0, ORDER_METHOD_EST, 12, 0);
     for (i = 0; i < LPC_ORDER; i++)
-        block_coefs[NBLOCKS - 1][i] = -lpc_coefs[LPC_ORDER - 1][i]
-                                       * (1 << (12 - shift[LPC_ORDER - 1]));
+        block_coefs[NBLOCKS - 1][i] = -(lpc_coefs[LPC_ORDER - 1][i] <<
+                                        (12 - shift[LPC_ORDER - 1]));
 
     /**
      * TODO: apply perceptual weighting of the input speech through bandwidth
@@ -530,24 +547,23 @@ static int ra144_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     ff_af_queue_remove(&ractx->afq, avctx->frame_size, &avpkt->pts,
                        &avpkt->duration);
 
+    avpkt->size = FRAMESIZE;
     *got_packet_ptr = 1;
     return 0;
 }
 
 
-const FFCodec ff_ra_144_encoder = {
-    .p.name         = "real_144",
-    CODEC_LONG_NAME("RealAudio 1.0 (14.4K)"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_RA_144,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
-                      AV_CODEC_CAP_SMALL_LAST_FRAME,
+AVCodec ff_ra_144_encoder = {
+    .name           = "real_144",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_RA_144,
     .priv_data_size = sizeof(RA144Context),
     .init           = ra144_encode_init,
-    FF_CODEC_ENCODE_CB(ra144_encode_frame),
+    .encode2        = ra144_encode_frame,
     .close          = ra144_encode_close,
-    .p.sample_fmts  = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,
+    .capabilities   = CODEC_CAP_DELAY | CODEC_CAP_SMALL_LAST_FRAME,
+    .sample_fmts    = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,
                                                      AV_SAMPLE_FMT_NONE },
-    .p.supported_samplerates = (const int[]){ 8000, 0 },
-    .p.ch_layouts   = (const AVChannelLayout[]){ AV_CHANNEL_LAYOUT_MONO, { 0 } },
+    .supported_samplerates = (const int[]){ 8000, 0 },
+    .long_name      = NULL_IF_CONFIG_SMALL("RealAudio 1.0 (14.4K)"),
 };

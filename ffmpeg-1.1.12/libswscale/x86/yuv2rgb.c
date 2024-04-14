@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <assert.h>
 
 #include "config.h"
 #include "libswscale/rgb2rgb.h"
@@ -34,105 +35,79 @@
 #include "libswscale/swscale_internal.h"
 #include "libavutil/attributes.h"
 #include "libavutil/x86/asm.h"
-#include "libavutil/x86/cpu.h"
 #include "libavutil/cpu.h"
 
-#if HAVE_X86ASM
+#if HAVE_INLINE_ASM
 
 #define DITHER1XBPP // only for MMX
 
+/* hope these constant values are cache line aligned */
+DECLARE_ASM_CONST(8, uint64_t, mmx_00ffw)   = 0x00ff00ff00ff00ffULL;
+DECLARE_ASM_CONST(8, uint64_t, mmx_redmask) = 0xf8f8f8f8f8f8f8f8ULL;
+DECLARE_ASM_CONST(8, uint64_t, mmx_grnmask) = 0xfcfcfcfcfcfcfcfcULL;
+DECLARE_ASM_CONST(8, uint64_t, pb_e0) = 0xe0e0e0e0e0e0e0e0ULL;
+DECLARE_ASM_CONST(8, uint64_t, pb_03) = 0x0303030303030303ULL;
+DECLARE_ASM_CONST(8, uint64_t, pb_07) = 0x0707070707070707ULL;
+
 //MMX versions
-#if HAVE_MMX
+#if HAVE_MMX_INLINE
 #undef RENAME
-#define COMPILE_TEMPLATE_MMX
-#define RENAME(a) a ## _mmx
+#undef COMPILE_TEMPLATE_MMXEXT
+#define COMPILE_TEMPLATE_MMXEXT 0
+#define RENAME(a) a ## _MMX
 #include "yuv2rgb_template.c"
-#undef COMPILE_TEMPLATE_MMX
-#endif /* HAVE_MMX */
+#endif /* HAVE_MMX_INLINE */
 
 // MMXEXT versions
+#if HAVE_MMXEXT_INLINE
 #undef RENAME
-#define COMPILE_TEMPLATE_MMXEXT
-#define RENAME(a) a ## _mmxext
-#include "yuv2rgb_template.c"
 #undef COMPILE_TEMPLATE_MMXEXT
-
-//SSSE3 versions
-#undef RENAME
-#define COMPILE_TEMPLATE_SSSE3
-#define RENAME(a) a ## _ssse3
+#define COMPILE_TEMPLATE_MMXEXT 1
+#define RENAME(a) a ## _MMXEXT
 #include "yuv2rgb_template.c"
+#endif /* HAVE_MMXEXT_INLINE */
 
-#endif /* HAVE_X86ASM */
+#endif /* HAVE_INLINE_ASM */
 
-av_cold SwsFunc ff_yuv2rgb_init_x86(SwsContext *c)
+av_cold SwsFunc ff_yuv2rgb_init_mmx(SwsContext *c)
 {
-#if HAVE_X86ASM
+#if HAVE_INLINE_ASM
     int cpu_flags = av_get_cpu_flags();
 
-    if (EXTERNAL_SSSE3(cpu_flags)) {
-        switch (c->dstFormat) {
-        case AV_PIX_FMT_RGB32:
-            if (c->srcFormat == AV_PIX_FMT_YUVA420P) {
-#if CONFIG_SWSCALE_ALPHA
-                return yuva420_rgb32_ssse3;
-#endif
-                break;
-            } else
-                return yuv420_rgb32_ssse3;
-        case AV_PIX_FMT_BGR32:
-            if (c->srcFormat == AV_PIX_FMT_YUVA420P) {
-#if CONFIG_SWSCALE_ALPHA
-                return yuva420_bgr32_ssse3;
-#endif
-                break;
-            } else
-                return yuv420_bgr32_ssse3;
-        case AV_PIX_FMT_RGB24:
-            return yuv420_rgb24_ssse3;
-        case AV_PIX_FMT_BGR24:
-            return yuv420_bgr24_ssse3;
-        case AV_PIX_FMT_RGB565:
-            return yuv420_rgb16_ssse3;
-        case AV_PIX_FMT_RGB555:
-            return yuv420_rgb15_ssse3;
-        }
-    }
-
-    if (EXTERNAL_MMXEXT(cpu_flags)) {
+#if HAVE_MMXEXT_INLINE
+    if (cpu_flags & AV_CPU_FLAG_MMXEXT) {
         switch (c->dstFormat) {
         case AV_PIX_FMT_RGB24:
-            return yuv420_rgb24_mmxext;
+            return yuv420_rgb24_MMXEXT;
         case AV_PIX_FMT_BGR24:
-            return yuv420_bgr24_mmxext;
+            return yuv420_bgr24_MMXEXT;
         }
     }
+#endif
 
-    if (EXTERNAL_MMX(cpu_flags)) {
+    if (cpu_flags & AV_CPU_FLAG_MMX) {
         switch (c->dstFormat) {
             case AV_PIX_FMT_RGB32:
                 if (c->srcFormat == AV_PIX_FMT_YUVA420P) {
-#if CONFIG_SWSCALE_ALPHA
-                    return yuva420_rgb32_mmx;
+#if HAVE_7REGS && CONFIG_SWSCALE_ALPHA
+                    return yuva420_rgb32_MMX;
 #endif
                     break;
-                } else
-                    return yuv420_rgb32_mmx;
+                } else return yuv420_rgb32_MMX;
             case AV_PIX_FMT_BGR32:
                 if (c->srcFormat == AV_PIX_FMT_YUVA420P) {
-#if CONFIG_SWSCALE_ALPHA
-                    return yuva420_bgr32_mmx;
+#if HAVE_7REGS && CONFIG_SWSCALE_ALPHA
+                    return yuva420_bgr32_MMX;
 #endif
                     break;
-                } else
-                    return yuv420_bgr32_mmx;
-            case AV_PIX_FMT_RGB565:
-                return yuv420_rgb16_mmx;
-            case AV_PIX_FMT_RGB555:
-                return yuv420_rgb15_mmx;
+                } else return yuv420_bgr32_MMX;
+            case AV_PIX_FMT_RGB24:  return yuv420_rgb24_MMX;
+            case AV_PIX_FMT_BGR24:  return yuv420_bgr24_MMX;
+            case AV_PIX_FMT_RGB565: return yuv420_rgb16_MMX;
+            case AV_PIX_FMT_RGB555: return yuv420_rgb15_MMX;
         }
     }
+#endif /* HAVE_INLINE_ASM */
 
-#endif /* HAVE_X86ASM */
     return NULL;
 }

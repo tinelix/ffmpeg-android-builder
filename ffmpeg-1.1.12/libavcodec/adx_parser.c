@@ -1,20 +1,20 @@
 /*
  * Copyright (c) 2011  Justin Ruggles
  *
- * This file is part of FFmpeg.
+ * This file is part of Libav.
  *
- * FFmpeg is free software; you can redistribute it and/or
+ * Libav is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
  *
- * FFmpeg is distributed in the hope that it will be useful,
+ * Libav is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with FFmpeg; if not, write to the Free Software
+ * License along with Libav; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
@@ -73,16 +73,6 @@ static int adx_parse(AVCodecParserContext *s1,
             s->remaining = 0;
         } else
             s->remaining -= buf_size;
-    } else if (avctx->ch_layout.nb_channels > 0) {
-        if (!s->block_size)
-            s->block_size = avctx->ch_layout.nb_channels * BLOCK_SIZE;
-        if (!s->remaining)
-            s->remaining = s->block_size;
-        if (s->remaining <= buf_size) {
-            next = s->remaining;
-            s->remaining = 0;
-        } else
-            s->remaining -= buf_size;
     }
 
     if (ff_combine_frame(pc, next, &buf, &buf_size) < 0 || !buf_size) {
@@ -98,7 +88,7 @@ static int adx_parse(AVCodecParserContext *s1,
     return next;
 }
 
-const AVCodecParser ff_adx_parser = {
+AVCodecParser ff_adx_parser = {
     .codec_ids      = { AV_CODEC_ID_ADPCM_ADX },
     .priv_data_size = sizeof(ADXParseContext),
     .parser_parse   = adx_parse,

@@ -50,10 +50,8 @@ header:
         temporal_decomposition_count    u   header_state
         spatial_decomposition_count     u   header_state
         colorspace_type                 u   header_state
-        if (nb_planes > 2) {
-            chroma_h_shift              u   header_state
-            chroma_v_shift              u   header_state
-        }
+        chroma_h_shift                  u   header_state
+        chroma_v_shift                  u   header_state
         spatial_scalability             b   header_state
         max_ref_frames-1                u   header_state
         qlogs
@@ -61,7 +59,7 @@ header:
     if(!keyframe){
         update_mc                       b   header_state
         if(update_mc){
-            for(plane=0; plane<nb_plane_types; plane++){
+            for(plane=0; plane<2; plane++){
                 diag_mc                 b   header_state
                 htaps/2-1               u   header_state
                 for(i= p->htaps/2; i; i--)
@@ -82,7 +80,7 @@ header:
     block_max_depth                     s   header_state
 
 qlogs:
-    for(plane=0; plane<nb_plane_types; plane++){
+    for(plane=0; plane<2; plane++){
         quant_table[plane][0][0]        s   header_state
         for(level=0; level < spatial_decomposition_count; level++){
             quant_table[plane][level][1]s   header_state
@@ -133,10 +131,8 @@ block(level):
 
 residual:
     residual2(luma)
-    if (nb_planes > 2) {
-        residual2(chroma_cr)
-        residual2(chroma_cb)
-    }
+    residual2(chroma_cr)
+    residual2(chroma_cb)
 
 residual2:
     for(level=0; level<spatial_decomposition_count; level++){
@@ -150,7 +146,7 @@ residual2:
 subband:
     FIXME
 
-nb_plane_types = gray ? 1 : 2;
+
 
 Tag description:
 ----------------
@@ -172,11 +168,7 @@ spatial_decomposition_count
     FIXME
 
 colorspace_type
-    0   unspecified YCbCr
-    1   Gray
-    2   Gray + Alpha
-    3   GBR
-    4   GBRA
+    0
     this MUST NOT change within a bitstream
 
 chroma_h_shift
@@ -235,7 +227,7 @@ spatial_decomposition_type
     stored as delta from last, last is reset to 0 if always_reset || keyframe
 
 qlog
-    quality (logarithmic quantizer scale)
+    quality (logarthmic quantizer scale)
     stored as delta from last, last is reset to 0 if always_reset || keyframe
 
 mv_scale
@@ -251,11 +243,11 @@ block_max_depth
     stored as delta from last, last is reset to 0 if always_reset || keyframe
 
 quant_table
-    quantization table
+    quantiztation table
 
 
 Highlevel bitstream structure:
-==============================
+=============================
  --------------------------------------------
 |                   Header                   |
  --------------------------------------------
@@ -303,7 +295,7 @@ Decoding process:
                   |  Intra DC  |               |
                   |            |    LL0 subband prediction
                    ------------                |
-                                \        Dequantization
+                                \        Dequantizaton
  -------------------             \             |
 |  Reference frames |             \           IDWT
 | -------   ------- |    Motion    \           |
@@ -390,8 +382,8 @@ motion vector prediction
    (mvx_diff, mvy_diff)*mv_scale
 
 
-Intra DC Prediction:
-====================
+Intra DC Predicton:
+======================
 the luma and chroma values of the left block are used as predictors
 
 the used luma and chroma is the sum of the predictor and y_diff, cb_diff, cr_diff
@@ -407,7 +399,7 @@ Motion Compensation:
 
 Halfpel interpolation:
 ----------------------
-Halfpel interpolation is done by convolution with the halfpel filter stored
+halfpel interpolation is done by convolution with the halfpel filter stored
 in the header:
 
 horizontal halfpel samples are found by
@@ -463,8 +455,8 @@ to the closest available fullpel sample
 Smaller pel interpolation:
 --------------------------
 if diag_mc is set then points which lie on a line between 2 vertically,
-horizontally or diagonally adjacent halfpel points shall be interpolated
-linearly with rounding to nearest and halfway values rounded up.
+horiziontally or diagonally adjacent halfpel points shall be interpolated
+linearls with rounding to nearest and halfway values rounded up.
 points which lie on 2 diagonals at the same time should only use the one
 diagonal not containing the fullpel point
 
@@ -519,15 +511,15 @@ width,height here are the width and height of the LL0 subband not of the final
 video
 
 
-Dequantization:
-===============
+Dequantizaton:
+==============
 FIXME
 
 Wavelet Transform:
 ==================
 
 Snow supports 2 wavelet transforms, the symmetric biorthogonal 5/3 integer
-transform and an integer approximation of the symmetric biorthogonal 9/7
+transform and a integer approximation of the symmetric biorthogonal 9/7
 daubechies wavelet.
 
 2D IDWT (inverse discrete wavelet transform)
@@ -618,6 +610,7 @@ flip wavelet?
 try to use the wavelet transformed predicted image (motion compensated image) as context for coding the residual coefficients
 try the MV length as context for coding the residual coefficients
 use extradata for stuff which is in the keyframes now?
+the MV median predictor is patented IIRC
 implement per picture halfpel interpolation
 try different range coder state transition tables for different contexts
 

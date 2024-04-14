@@ -25,16 +25,14 @@
  */
 
 #include "libavutil/common.h"
-#include "libavutil/frame.h"
+#include "libavutil/lfg.h"
 #include "libavutil/xga_font_data.h"
 #include "avcodec.h"
 #include "cga_data.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 #define ATTR_BOLD         0x01  /**< Bold/Bright-foreground (mode 1) */
 #define ATTR_FAINT        0x02  /**< Faint (mode 2) */
-#define ATTR_ITALICS      0x04  /**< Italics (mode 3) */
 #define ATTR_UNDERLINE    0x08  /**< Underline (mode 4) */
 #define ATTR_BLINK        0x10  /**< Blink/Bright-background (mode 5) */
 #define ATTR_REVERSE      0x40  /**< Reverse (mode 7) */
@@ -51,8 +49,8 @@ static const uint8_t ansi_to_cga[16] = {
     0,  4,  2,  6,  1,  5,  3, 7, 8, 12, 10, 14,  9, 13, 11, 15
 };
 
-typedef struct AnsiContext {
-    AVFrame *frame;
+typedef struct {
+    AVFrame frame;
     int x;                /**< x cursor position (pixels) */
     int y;                /**< y cursor position (pixels) */
     int sx;               /**< saved x cursor position (pixels) */
@@ -87,18 +85,9 @@ static av_cold int decode_init(AVCodecContext *avctx)
     s->fg          = DEFAULT_FG_COLOR;
     s->bg          = DEFAULT_BG_COLOR;
 
-    if (!avctx->width || !avctx->height) {
-        int ret = ff_set_dimensions(avctx, 80 << 3, 25 << 4);
-        if (ret < 0)
-            return ret;
-    } else if (avctx->width % FONT_WIDTH || avctx->height % s->font_height) {
-        av_log(avctx, AV_LOG_ERROR, "Invalid dimensions %d %d\n", avctx->width, avctx->height);
-        return AVERROR(EINVAL);
-    }
-
-    s->frame = av_frame_alloc();
-    if (!s->frame)
-        return AVERROR(ENOMEM);
+    avcodec_get_frame_defaults(&s->frame);
+    if (!avctx->width || !avctx->height)
+        avcodec_set_dimensions(avctx, 80<<3, 25<<4);
 
     return 0;
 }
@@ -123,18 +112,18 @@ static void hscroll(AVCodecContext *avctx)
     AnsiContext *s = avctx->priv_data;
     int i;
 
-    if (s->y <= avctx->height - 2*s->font_height) {
+    if (s->y < avctx->height - s->font_height) {
         s->y += s->font_height;
         return;
     }
 
     i = 0;
     for (; i < avctx->height - s->font_height; i++)
-        memcpy(s->frame->data[0] + i * s->frame->linesize[0],
-               s->frame->data[0] + (i + s->font_height) * s->frame->linesize[0],
+        memcpy(s->frame.data[0] + i * s->frame.linesize[0],
+               s->frame.data[0] + (i + s->font_height) * s->frame.linesize[0],
                avctx->width);
     for (; i < avctx->height; i++)
-        memset(s->frame->data[0] + i * s->frame->linesize[0],
+        memset(s->frame.data[0] + i * s->frame.linesize[0],
             DEFAULT_BG_COLOR, avctx->width);
 }
 
@@ -143,7 +132,7 @@ static void erase_line(AVCodecContext * avctx, int xoffset, int xlength)
     AnsiContext *s = avctx->priv_data;
     int i;
     for (i = 0; i < s->font_height; i++)
-        memset(s->frame->data[0] + (s->y + i)*s->frame->linesize[0] + xoffset,
+        memset(s->frame.data[0] + (s->y + i)*s->frame.linesize[0] + xoffset,
             DEFAULT_BG_COLOR, xlength);
 }
 
@@ -152,7 +141,7 @@ static void erase_screen(AVCodecContext *avctx)
     AnsiContext *s = avctx->priv_data;
     int i;
     for (i = 0; i < avctx->height; i++)
-        memset(s->frame->data[0] + i * s->frame->linesize[0], DEFAULT_BG_COLOR, avctx->width);
+        memset(s->frame.data[0] + i * s->frame.linesize[0], DEFAULT_BG_COLOR, avctx->width);
     s->x = s->y = 0;
 }
 
@@ -173,10 +162,10 @@ static void draw_char(AVCodecContext *avctx, int c)
         FFSWAP(int, fg, bg);
     if ((s->attributes & ATTR_CONCEALED))
         fg = bg;
-    ff_draw_pc_font(s->frame->data[0] + s->y * s->frame->linesize[0] + s->x,
-                    s->frame->linesize[0], s->font, s->font_height, c, fg, bg);
+    ff_draw_pc_font(s->frame.data[0] + s->y * s->frame.linesize[0] + s->x,
+                    s->frame.linesize[0], s->font, s->font_height, c, fg, bg);
     s->x += FONT_WIDTH;
-    if (s->x > avctx->width - FONT_WIDTH) {
+    if (s->x >= avctx->width) {
         s->x = 0;
         hscroll(avctx);
     }
@@ -189,10 +178,7 @@ static void draw_char(AVCodecContext *avctx, int c)
 static int execute_code(AVCodecContext * avctx, int c)
 {
     AnsiContext *s = avctx->priv_data;
-    int ret, i;
-    int width  = avctx->width;
-    int height = avctx->height;
-
+    int ret, i, width, height;
     switch(c) {
     case 'A': //Cursor Up
         s->y = FFMAX(s->y - (s->nb_args > 0 ? s->args[0]*s->font_height : s->font_height), 0);
@@ -211,10 +197,12 @@ static int execute_code(AVCodecContext * avctx, int c)
         s->y = s->nb_args > 0 ? av_clip((s->args[0] - 1)*s->font_height, 0, avctx->height - s->font_height) : 0;
         s->x = s->nb_args > 1 ? av_clip((s->args[1] - 1)*FONT_WIDTH,     0, avctx->width  - FONT_WIDTH) : 0;
         break;
-    case 'h': //set screen mode
+    case 'h': //set creen mode
     case 'l': //reset screen mode
         if (s->nb_args < 2)
             s->args[0] = DEFAULT_SCREEN_MODE;
+        width = avctx->width;
+        height = avctx->height;
         switch(s->args[0]) {
         case 0: case 1: case 4: case 5: case 13: case 19: //320x200 (25 rows)
             s->font = avpriv_cga_font;
@@ -249,25 +237,20 @@ static int execute_code(AVCodecContext * avctx, int c)
             height = 60<<4;
             break;
         default:
-            avpriv_request_sample(avctx, "Unsupported screen mode");
+            av_log_ask_for_sample(avctx, "unsupported screen mode\n");
         }
-        s->x = av_clip(s->x, 0, width  - FONT_WIDTH);
-        s->y = av_clip(s->y, 0, height - s->font_height);
         if (width != avctx->width || height != avctx->height) {
-            av_frame_unref(s->frame);
-            ret = ff_set_dimensions(avctx, width, height);
-            if (ret < 0)
+            if (s->frame.data[0])
+                avctx->release_buffer(avctx, &s->frame);
+            avcodec_set_dimensions(avctx, width, height);
+            ret = ff_get_buffer(avctx, &s->frame);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
                 return ret;
-            if ((ret = ff_get_buffer(avctx, s->frame,
-                                     AV_GET_BUFFER_FLAG_REF)) < 0)
-                return ret;
-            s->frame->pict_type           = AV_PICTURE_TYPE_I;
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-            s->frame->palette_has_changed = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-            set_palette((uint32_t *)s->frame->data[1]);
+            }
+            s->frame.pict_type           = AV_PICTURE_TYPE_I;
+            s->frame.palette_has_changed = 1;
+            set_palette((uint32_t *)s->frame.data[1]);
             erase_screen(avctx);
         } else if (c == 'l') {
             erase_screen(avctx);
@@ -278,13 +261,13 @@ FF_ENABLE_DEPRECATION_WARNINGS
         case 0:
             erase_line(avctx, s->x, avctx->width - s->x);
             if (s->y < avctx->height - s->font_height)
-                memset(s->frame->data[0] + (s->y + s->font_height)*s->frame->linesize[0],
-                    DEFAULT_BG_COLOR, (avctx->height - s->y - s->font_height)*s->frame->linesize[0]);
+                memset(s->frame.data[0] + (s->y + s->font_height)*s->frame.linesize[0],
+                    DEFAULT_BG_COLOR, (avctx->height - s->y - s->font_height)*s->frame.linesize[0]);
             break;
         case 1:
             erase_line(avctx, 0, s->x);
             if (s->y > 0)
-                memset(s->frame->data[0], DEFAULT_BG_COLOR, s->y * s->frame->linesize[0]);
+                memset(s->frame.data[0], DEFAULT_BG_COLOR, s->y * s->frame.linesize[0]);
             break;
         case 2:
             erase_screen(avctx);
@@ -313,7 +296,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 s->attributes = 0;
                 s->fg = DEFAULT_FG_COLOR;
                 s->bg = DEFAULT_BG_COLOR;
-            } else if (m == 1 || m == 2 || m == 3 || m == 4 || m == 5 || m == 7 || m == 8) {
+            } else if (m == 1 || m == 2 || m == 4 || m == 5 || m == 7 || m == 8) {
                 s->attributes |= 1 << (m - 1);
             } else if (m >= 30 && m <= 37) {
                 s->fg = ansi_to_cga[m - 30];
@@ -330,9 +313,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 s->bg = index < 16 ? ansi_to_cga[index] : index;
                 i += 2;
             } else if (m == 49) {
-                s->bg = ansi_to_cga[DEFAULT_BG_COLOR];
+                s->fg = ansi_to_cga[DEFAULT_BG_COLOR];
             } else {
-                avpriv_request_sample(avctx, "Unsupported rendition parameter");
+                av_log_ask_for_sample(avctx, "unsupported rendition parameter\n");
             }
         }
         break;
@@ -349,38 +332,36 @@ FF_ENABLE_DEPRECATION_WARNINGS
         s->y = av_clip(s->sy, 0, avctx->height - s->font_height);
         break;
     default:
-        avpriv_request_sample(avctx, "Unknown escape code");
+        av_log_ask_for_sample(avctx, "unsupported escape code\n");
         break;
     }
-    s->x = av_clip(s->x, 0, avctx->width  - FONT_WIDTH);
-    s->y = av_clip(s->y, 0, avctx->height - s->font_height);
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx,
+                            void *data, int *got_frame,
+                            AVPacket *avpkt)
 {
     AnsiContext *s = avctx->priv_data;
-    const uint8_t *buf = avpkt->data;
+    uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     const uint8_t *buf_end   = buf+buf_size;
     int ret, i, count;
 
-    if ((ret = ff_reget_buffer(avctx, s->frame, 0)) < 0)
+    ret = avctx->reget_buffer(avctx, &s->frame);
+    if (ret < 0){
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
-    if (!avctx->frame_num) {
+    }
+    if (!avctx->frame_number) {
         for (i=0; i<avctx->height; i++)
-            memset(s->frame->data[0]+ i*s->frame->linesize[0], 0, avctx->width);
-        memset(s->frame->data[1], 0, AVPALETTE_SIZE);
+            memset(s->frame.data[0]+ i*s->frame.linesize[0], 0, avctx->width);
+        memset(s->frame.data[1], 0, AVPALETTE_SIZE);
     }
 
-    s->frame->pict_type           = AV_PICTURE_TYPE_I;
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-    s->frame->palette_has_changed = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-    set_palette((uint32_t *)s->frame->data[1]);
+    s->frame.pict_type           = AV_PICTURE_TYPE_I;
+    s->frame.palette_has_changed = 1;
+    set_palette((uint32_t *)s->frame.data[1]);
     if (!s->first_frame) {
         erase_screen(avctx);
         s->first_frame = 1;
@@ -438,8 +419,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
                     s->args[s->nb_args] = FFMAX(s->args[s->nb_args], 0) * 10 + buf[0] - '0';
                 break;
             case ';':
-                if (s->nb_args < MAX_NB_ARGS)
-                    s->nb_args++;
+                s->nb_args++;
                 if (s->nb_args < MAX_NB_ARGS)
                     s->args[s->nb_args] = 0;
                 break;
@@ -454,8 +434,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
                     av_log(avctx, AV_LOG_WARNING, "args overflow (%i)\n", s->nb_args);
                 if (s->nb_args < MAX_NB_ARGS && s->args[s->nb_args] >= 0)
                     s->nb_args++;
-                if ((ret = execute_code(avctx, buf[0])) < 0)
-                    return ret;
+                if (execute_code(avctx, buf[0]) < 0)
+                    return -1;
                 s->state = STATE_NORMAL;
             }
             break;
@@ -469,33 +449,26 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     *got_frame = 1;
-    if ((ret = av_frame_ref(rframe, s->frame)) < 0)
-        return ret;
+    *(AVFrame*)data = s->frame;
     return buf_size;
 }
 
 static av_cold int decode_close(AVCodecContext *avctx)
 {
     AnsiContext *s = avctx->priv_data;
-
-    av_frame_free(&s->frame);
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
     return 0;
 }
 
-static const FFCodecDefault ansi_defaults[] = {
-    { "max_pixels", "640*480" },
-    { NULL },
-};
-
-const FFCodec ff_ansi_decoder = {
-    .p.name         = "ansi",
-    CODEC_LONG_NAME("ASCII/ANSI art"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_ANSI,
+AVCodec ff_ansi_decoder = {
+    .name           = "ansi",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_ANSI,
     .priv_data_size = sizeof(AnsiContext),
     .init           = decode_init,
     .close          = decode_close,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .defaults       = ansi_defaults,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("ASCII/ANSI art"),
 };

@@ -21,8 +21,6 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "internal.h"
 
 static av_cold int y41p_encode_init(AVCodecContext *avctx)
@@ -32,8 +30,13 @@ static av_cold int y41p_encode_init(AVCodecContext *avctx)
         return AVERROR_INVALIDDATA;
     }
 
+    avctx->coded_frame = avcodec_alloc_frame();
     avctx->bits_per_coded_sample = 12;
-    avctx->bit_rate = ff_guess_coded_bitrate(avctx);
+
+    if (!avctx->coded_frame) {
+        av_log(avctx, AV_LOG_ERROR, "Could not allocate frame.\n");
+        return AVERROR(ENOMEM);
+    }
 
     return 0;
 }
@@ -42,13 +45,15 @@ static int y41p_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                              const AVFrame *pic, int *got_packet)
 {
     uint8_t *dst;
-    const uint8_t *y, *u, *v;
+    uint8_t *y, *u, *v;
     int i, j, ret;
 
-    ret = ff_get_encode_buffer(avctx, pkt, avctx->width * avctx->height * 1.5, 0);
-    if (ret < 0)
+    if ((ret = ff_alloc_packet2(avctx, pkt, avctx->width * avctx->height * 1.5)) < 0)
         return ret;
 
+    avctx->coded_frame->reference = 0;
+    avctx->coded_frame->key_frame = 1;
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
     dst = pkt->data;
 
     for (i = avctx->height - 1; i >= 0; i--) {
@@ -73,18 +78,26 @@ static int y41p_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
         }
     }
 
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
     return 0;
 }
 
-const FFCodec ff_y41p_encoder = {
-    .p.name       = "y41p",
-    CODEC_LONG_NAME("Uncompressed YUV 4:1:1 12-bit"),
-    .p.type       = AVMEDIA_TYPE_VIDEO,
-    .p.id         = AV_CODEC_ID_Y41P,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+static av_cold int y41p_encode_close(AVCodecContext *avctx)
+{
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_y41p_encoder = {
+    .name         = "y41p",
+    .type         = AVMEDIA_TYPE_VIDEO,
+    .id           = AV_CODEC_ID_Y41P,
     .init         = y41p_encode_init,
-    FF_CODEC_ENCODE_CB(y41p_encode_frame),
-    .p.pix_fmts   = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV411P,
+    .encode2      = y41p_encode_frame,
+    .close        = y41p_encode_close,
+    .pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV411P,
                                                  AV_PIX_FMT_NONE },
+    .long_name    = NULL_IF_CONFIG_SMALL("Uncompressed YUV 4:1:1 12-bit"),
 };

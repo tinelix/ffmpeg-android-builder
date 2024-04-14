@@ -34,7 +34,7 @@ RMStream *ff_rm_alloc_rmstream (void);
 void      ff_rm_free_rmstream  (RMStream *rms);
 
 /*< input format for Realmedia-style RTSP streams */
-extern const struct FFInputFormat ff_rdt_demuxer;
+extern AVInputFormat ff_rdt_demuxer;
 
 /**
  * Read the MDPR chunk, which contains stream-specific codec initialization
@@ -50,7 +50,7 @@ extern const struct FFInputFormat ff_rdt_demuxer;
  */
 int ff_rm_read_mdpr_codecdata (AVFormatContext *s, AVIOContext *pb,
                                AVStream *st, RMStream *rst,
-                               unsigned int codec_data_size, const uint8_t *mime);
+                               int codec_data_size, const uint8_t *mime);
 
 /**
  * Parse one rm-stream packet from the input bytestream.

@@ -41,44 +41,23 @@ typedef struct {
     char *font_name;      /**< font face (case sensitive) */
     int   font_size;      /**< font height */
     int   primary_color;  /**< color that a subtitle will normally appear in */
-    int   secondary_color;
-    int   outline_color;  /**< color for outline in ASS, called tertiary in SSA */
     int   back_color;     /**< color of the subtitle outline or shadow */
     int   bold;           /**< whether text is bold (1) or not (0) */
     int   italic;         /**< whether text is italic (1) or not (0) */
     int   underline;      /**< whether text is underlined (1) or not (0) */
-    int   strikeout;
-    float scalex;
-    float scaley;
-    float spacing;
-    float angle;
-    int   border_style;
-    float outline;
-    float shadow;
     int   alignment;      /**< position of the text (left, center, top...),
                                defined after the layout of the numpad
                                (1-3 sub, 4-6 mid, 7-9 top) */
-    int   margin_l;
-    int   margin_r;
-    int   margin_v;
-    int   alpha_level;
-    int   encoding;
 } ASSStyle;
 
 /**
  * fields extracted from the [Events] section
  */
 typedef struct {
-    int   readorder;
     int   layer;    /**< higher numbered layers are drawn over lower numbered */
     int   start;    /**< start time of the dialog in centiseconds */
     int   end;      /**< end time of the dialog in centiseconds */
     char *style;    /**< name of the ASSStyle to use with this dialog */
-    char *name;
-    int   margin_l;
-    int   margin_r;
-    int   margin_v;
-    char *effect;
     char *text;     /**< actual text which will be displayed as a subtitle,
                          can include style override control codes (see
                          ff_ass_split_override_codes()) */
@@ -104,24 +83,26 @@ typedef struct ASSSplitContext ASSSplitContext;
  * Split a full ASS file or a ASS header from a string buffer and store
  * the split structure in a newly allocated context.
  *
- * @param buf String containing the ASS formatted data.
+ * @param buf String containing the ASS formated data.
  * @return Newly allocated struct containing split data.
  */
 ASSSplitContext *ff_ass_split(const char *buf);
 
 /**
- * Free a dialogue obtained from ff_ass_split_dialog().
- */
-void ff_ass_free_dialog(ASSDialog **dialogp);
-
-/**
- * Split one ASS Dialogue line from a string buffer.
+ * Split one or several ASS "Dialogue" lines from a string buffer and store
+ * them in a already initialized context.
  *
  * @param ctx Context previously initialized by ff_ass_split().
- * @param buf String containing the ASS "Dialogue" line.
- * @return Pointer to the split ASSDialog. Must be freed with ff_ass_free_dialog()
+ * @param buf String containing the ASS "Dialogue" lines.
+ * @param cache Set to 1 to keep all the previously split ASSDialog in
+ *              the context, or set to 0 to free all the previously split
+ *              ASSDialog.
+ * @param number If not NULL, the pointed integer will be set to the number
+ *               of split ASSDialog.
+ * @return Pointer to the first split ASSDialog.
  */
-ASSDialog *ff_ass_split_dialog(ASSSplitContext *ctx, const char *buf);
+ASSDialog *ff_ass_split_dialog(ASSSplitContext *ctx, const char *buf,
+                               int cache, int *number);
 
 /**
  * Free all the memory allocated for an ASSSplitContext.
@@ -143,7 +124,7 @@ typedef struct {
     void (*text)(void *priv, const char *text, int len);
     void (*new_line)(void *priv, int forced);
     void (*style)(void *priv, char style, int close);
-    void (*color)(void *priv, unsigned int /* color */, unsigned int color_id);
+    void (*color)(void *priv, unsigned int color, unsigned int color_id);
     void (*alpha)(void *priv, int alpha, int alpha_id);
     void (*font_name)(void *priv, const char *name);
     void (*font_size)(void *priv, int size);

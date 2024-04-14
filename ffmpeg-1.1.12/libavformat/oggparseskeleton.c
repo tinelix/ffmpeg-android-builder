@@ -18,7 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/intreadwrite.h"
+#include "libavcodec/bytestream.h"
 #include "avformat.h"
 #include "internal.h"
 #include "oggdec.h"
@@ -34,7 +34,8 @@ static int skeleton_header(AVFormatContext *s, int idx)
     uint64_t start_granule;
     int target_idx, start_time;
 
-    st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
+    strcpy(st->codec->codec_name, "skeleton");
+    st->codec->codec_type = AVMEDIA_TYPE_DATA;
 
     if ((os->flags & OGG_FLAG_EOS) && os->psize == 0)
         return 1;
@@ -63,7 +64,7 @@ static int skeleton_header(AVFormatContext *s, int idx)
         start_num = AV_RL64(buf+12);
         start_den = AV_RL64(buf+20);
 
-        if (start_den > 0 && start_num > 0) {
+        if (start_den) {
             int base_den;
             av_reduce(&start_time, &base_den, start_num, start_den, INT_MAX);
             avpriv_set_pts_info(st, 64, 1, base_den);

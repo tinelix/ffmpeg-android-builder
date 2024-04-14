@@ -1,5 +1,5 @@
 /*
- * H.261 codec
+ * H261 decoder
  * Copyright (c) 2002-2004 Michael Niedermayer <michaelni@gmx.at>
  * Copyright (c) 2004 Maarten Daniels
  *
@@ -22,33 +22,30 @@
 
 /**
  * @file
- * H.261 codec.
+ * h261codec.
  */
 
 #ifndef AVCODEC_H261_H
 #define AVCODEC_H261_H
 
 #include "mpegvideo.h"
-#include "rl.h"
 
 /**
  * H261Context
  */
-typedef struct H261Context {
+typedef struct H261Context{
+    MpegEncContext s;
+
+    int current_mba;
+    int previous_mba;
+    int mba_diff;
     int mtype;
-} H261Context;
+    int current_mv_x;
+    int current_mv_y;
+    int gob_number;
+    int gob_start_code_skipped; // 1 if gob start code is already read before gob header is read
+}H261Context;
 
 #define MB_TYPE_H261_FIL 0x800000
-
-extern const uint8_t ff_h261_mba_code[35];
-extern const uint8_t ff_h261_mba_bits[35];
-extern const uint8_t ff_h261_mtype_code[10];
-extern const uint8_t ff_h261_mtype_bits[10];
-extern const int     ff_h261_mtype_map[10];
-extern const uint8_t ff_h261_mv_tab[17][2];
-extern const uint8_t ff_h261_cbp_tab[63][2];
-extern RLTable ff_h261_rl_tcoeff;
-
-void ff_h261_loop_filter(MpegEncContext *s);
 
 #endif /* AVCODEC_H261_H */

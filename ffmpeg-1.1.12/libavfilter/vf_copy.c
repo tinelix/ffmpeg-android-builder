@@ -21,56 +21,33 @@
  * copy video filter
  */
 
-#include "libavutil/imgutils.h"
 #include "libavutil/internal.h"
 #include "avfilter.h"
-#include "formats.h"
 #include "internal.h"
 #include "video.h"
 
-static int query_formats(AVFilterContext *ctx)
-{
-    return ff_set_common_formats(ctx, ff_formats_pixdesc_filter(0, AV_PIX_FMT_FLAG_HWACCEL));
-}
-
-static int filter_frame(AVFilterLink *inlink, AVFrame *in)
-{
-    AVFilterLink *outlink = inlink->dst->outputs[0];
-    AVFrame *out = ff_get_video_buffer(outlink, in->width, in->height);
-    int ret;
-
-    if (!out) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    ret = av_frame_copy_props(out, in);
-    if (ret < 0)
-        goto fail;
-    ret = av_frame_copy(out, in);
-    if (ret < 0)
-        goto fail;
-    av_frame_free(&in);
-    return ff_filter_frame(outlink, out);
-fail:
-    av_frame_free(&in);
-    av_frame_free(&out);
-    return ret;
-}
-
 static const AVFilterPad avfilter_vf_copy_inputs[] = {
     {
-        .name         = "default",
-        .type         = AVMEDIA_TYPE_VIDEO,
-        .filter_frame = filter_frame,
+        .name             = "default",
+        .type             = AVMEDIA_TYPE_VIDEO,
+        .get_video_buffer = ff_null_get_video_buffer,
+        .rej_perms        = ~0
     },
+    { NULL }
 };
 
-const AVFilter ff_vf_copy = {
-    .name        = "copy",
+static const AVFilterPad avfilter_vf_copy_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
+
+AVFilter avfilter_vf_copy = {
+    .name      = "copy",
     .description = NULL_IF_CONFIG_SMALL("Copy the input video unchanged to the output."),
-    .flags       = AVFILTER_FLAG_METADATA_ONLY,
-    FILTER_INPUTS(avfilter_vf_copy_inputs),
-    FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(query_formats),
+
+    .inputs    = avfilter_vf_copy_inputs,
+    .outputs   = avfilter_vf_copy_outputs,
 };

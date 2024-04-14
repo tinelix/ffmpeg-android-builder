@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010 Nolan Lum <nol888@gmail.com>
- * Copyright (c) 2009 Loren Merritt <lorenm@u.washington.edu>
+ * Copyright (c) 2009 Loren Merritt <lorenm@u.washignton.edu>
  *
  * This file is part of FFmpeg.
  *
@@ -27,7 +27,7 @@
 /// Holds instance-specific information for gradfun.
 typedef struct GradFunContext {
     const AVClass *class;
-    float strength;
+    double strength;    ///< user specified strength, used to define thresh
     int thresh;    ///< threshold for gradient algorithm
     int radius;    ///< blur radius
     int chroma_w;  ///< width of the chroma planes

@@ -20,16 +20,13 @@
 
 #include <stdint.h>
 
-#include "libavutil/attributes.h"
 #include "libavcodec/avcodec.h"
 #include "libavcodec/rv34dsp.h"
 #include "libavutil/arm/cpu.h"
 
 #define DECL_QPEL3(type, w, pos) \
-void ff_ ## type ## _rv40_qpel ## w ## _mc ## pos ## _neon(uint8_t *dst,       \
-                                                           const uint8_t *src, \
-                                                           ptrdiff_t stride)
-
+    void ff_##type##_rv40_qpel##w##_mc##pos##_neon(uint8_t *dst, uint8_t *src,\
+                                                   int stride)
 #define DECL_QPEL2(w, pos)                      \
     DECL_QPEL3(put, w, pos);                    \
     DECL_QPEL3(avg, w, pos)
@@ -49,11 +46,11 @@ DECL_QPEL_Y(1);
 DECL_QPEL_Y(2);
 DECL_QPEL_Y(3);
 
-void ff_put_rv40_chroma_mc8_neon(uint8_t *, const uint8_t *, ptrdiff_t, int, int, int);
-void ff_put_rv40_chroma_mc4_neon(uint8_t *, const uint8_t *, ptrdiff_t, int, int, int);
+void ff_put_rv40_chroma_mc8_neon(uint8_t *, uint8_t *, int, int, int, int);
+void ff_put_rv40_chroma_mc4_neon(uint8_t *, uint8_t *, int, int, int, int);
 
-void ff_avg_rv40_chroma_mc8_neon(uint8_t *, const uint8_t *, ptrdiff_t, int, int, int);
-void ff_avg_rv40_chroma_mc4_neon(uint8_t *, const uint8_t *, ptrdiff_t, int, int, int);
+void ff_avg_rv40_chroma_mc8_neon(uint8_t *, uint8_t *, int, int, int, int);
+void ff_avg_rv40_chroma_mc4_neon(uint8_t *, uint8_t *, int, int, int, int);
 
 void ff_rv40_weight_func_16_neon(uint8_t *, uint8_t *, uint8_t *, int, int, ptrdiff_t);
 void ff_rv40_weight_func_8_neon(uint8_t *, uint8_t *, uint8_t *, int, int, ptrdiff_t);
@@ -72,7 +69,7 @@ void ff_rv40_v_weak_loop_filter_neon(uint8_t *src, ptrdiff_t stride, int filter_
                                      int filter_q1, int alpha, int beta,
                                      int lim_p0q0, int lim_q1, int lim_p1);
 
-static av_cold void rv40dsp_init_neon(RV34DSPContext *c)
+static void ff_rv40dsp_init_neon(RV34DSPContext *c)
 {
     c->put_pixels_tab[0][ 1] = ff_put_rv40_qpel16_mc10_neon;
     c->put_pixels_tab[0][ 3] = ff_put_rv40_qpel16_mc30_neon;
@@ -141,10 +138,10 @@ static av_cold void rv40dsp_init_neon(RV34DSPContext *c)
     c->rv40_weak_loop_filter[1]     = ff_rv40_v_weak_loop_filter_neon;
 }
 
-av_cold void ff_rv40dsp_init_arm(RV34DSPContext *c)
+void ff_rv40dsp_init_arm(RV34DSPContext *c, DSPContext* dsp)
 {
     int cpu_flags = av_get_cpu_flags();
 
     if (have_neon(cpu_flags))
-        rv40dsp_init_neon(c);
+        ff_rv40dsp_init_neon(c);
 }

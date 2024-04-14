@@ -25,13 +25,11 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "mss12.h"
 
 typedef struct MSS1Context {
     MSS12Context   ctx;
-    AVFrame       *pic;
+    AVFrame        pic;
     SliceContext   sc;
 } MSS1Context;
 
@@ -57,13 +55,11 @@ static void arith_normalise(ArithCoder *c)
         c->low   <<= 1;
         c->high  <<= 1;
         c->high   |= 1;
-        if (get_bits_left(c->gbc.gb) < 1)
-            c->overread++;
         c->value  |= get_bits1(c->gbc.gb);
     }
 }
 
-ARITH_GET_BIT(arith)
+ARITH_GET_BIT()
 
 static int arith_get_bits(ArithCoder *c, int bits)
 {
@@ -108,14 +104,13 @@ static int arith_get_prob(ArithCoder *c, int16_t *probs)
     return sym;
 }
 
-ARITH_GET_MODEL_SYM(arith)
+ARITH_GET_MODEL_SYM()
 
 static void arith_init(ArithCoder *c, GetBitContext *gb)
 {
     c->low           = 0;
     c->high          = 0xFFFF;
     c->value         = get_bits(gb, 16);
-    c->overread      = 0;
     c->gbc.gb        = gb;
     c->get_model_sym = arith_get_model_sym;
     c->get_number    = arith_get_number;
@@ -140,9 +135,11 @@ static int decode_pal(MSS12Context *ctx, ArithCoder *acoder)
     return !!ncol;
 }
 
-static int mss1_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                             int *got_frame, AVPacket *avpkt)
+static int mss1_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                             AVPacket *avpkt)
 {
+    const uint8_t *buf = avpkt->data;
+    int buf_size = avpkt->size;
     MSS1Context *ctx = avctx->priv_data;
     MSS12Context *c = &ctx->ctx;
     GetBitContext gb;
@@ -150,47 +147,44 @@ static int mss1_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     int pal_changed = 0;
     int ret;
 
-    if ((ret = init_get_bits8(&gb, avpkt->data, avpkt->size)) < 0)
-        return ret;
-
+    init_get_bits(&gb, buf, buf_size * 8);
     arith_init(&acoder, &gb);
 
-    if ((ret = ff_reget_buffer(avctx, ctx->pic, 0)) < 0)
+    ctx->pic.reference    = 3;
+    ctx->pic.buffer_hints = FF_BUFFER_HINTS_VALID | FF_BUFFER_HINTS_READABLE |
+                            FF_BUFFER_HINTS_PRESERVE | FF_BUFFER_HINTS_REUSABLE;
+    if ((ret = avctx->reget_buffer(avctx, &ctx->pic)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "reget_buffer() failed\n");
         return ret;
+    }
 
-    c->pal_pic    =  ctx->pic->data[0] + ctx->pic->linesize[0] * (avctx->height - 1);
-    c->pal_stride = -ctx->pic->linesize[0];
+    c->pal_pic    =  ctx->pic.data[0] + ctx->pic.linesize[0] * (avctx->height - 1);
+    c->pal_stride = -ctx->pic.linesize[0];
     c->keyframe   = !arith_get_bit(&acoder);
     if (c->keyframe) {
         c->corrupted = 0;
         ff_mss12_slicecontext_reset(&ctx->sc);
         pal_changed        = decode_pal(c, &acoder);
-        ctx->pic->flags |= AV_FRAME_FLAG_KEY;
-        ctx->pic->pict_type = AV_PICTURE_TYPE_I;
+        ctx->pic.key_frame = 1;
+        ctx->pic.pict_type = AV_PICTURE_TYPE_I;
     } else {
         if (c->corrupted)
             return AVERROR_INVALIDDATA;
-        ctx->pic->flags &= ~AV_FRAME_FLAG_KEY;
-        ctx->pic->pict_type = AV_PICTURE_TYPE_P;
+        ctx->pic.key_frame = 0;
+        ctx->pic.pict_type = AV_PICTURE_TYPE_P;
     }
     c->corrupted = ff_mss12_decode_rect(&ctx->sc, &acoder, 0, 0,
                                         avctx->width, avctx->height);
     if (c->corrupted)
         return AVERROR_INVALIDDATA;
-    memcpy(ctx->pic->data[1], c->pal, AVPALETTE_SIZE);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-    ctx->pic->palette_has_changed = pal_changed;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-
-    if ((ret = av_frame_ref(rframe, ctx->pic)) < 0)
-        return ret;
+    memcpy(ctx->pic.data[1], c->pal, AVPALETTE_SIZE);
+    ctx->pic.palette_has_changed = pal_changed;
 
     *got_frame      = 1;
+    *(AVFrame*)data = ctx->pic;
 
     /* always report that the buffer was completely consumed */
-    return avpkt->size;
+    return buf_size;
 }
 
 static av_cold int mss1_decode_init(AVCodecContext *avctx)
@@ -199,14 +193,9 @@ static av_cold int mss1_decode_init(AVCodecContext *avctx)
     int ret;
 
     c->ctx.avctx       = avctx;
-
-    c->pic = av_frame_alloc();
-    if (!c->pic)
-        return AVERROR(ENOMEM);
+    avctx->coded_frame = &c->pic;
 
     ret = ff_mss12_decode_init(&c->ctx, 0, &c->sc, NULL);
-    if (ret < 0)
-        return ret;
 
     avctx->pix_fmt = AV_PIX_FMT_PAL8;
 
@@ -217,21 +206,21 @@ static av_cold int mss1_decode_end(AVCodecContext *avctx)
 {
     MSS1Context * const ctx = avctx->priv_data;
 
-    av_frame_free(&ctx->pic);
+    if (ctx->pic.data[0])
+        avctx->release_buffer(avctx, &ctx->pic);
     ff_mss12_decode_end(&ctx->ctx);
 
     return 0;
 }
 
-const FFCodec ff_mss1_decoder = {
-    .p.name         = "mss1",
-    CODEC_LONG_NAME("MS Screen 1"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_MSS1,
+AVCodec ff_mss1_decoder = {
+    .name           = "mss1",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_MSS1,
     .priv_data_size = sizeof(MSS1Context),
     .init           = mss1_decode_init,
     .close          = mss1_decode_end,
-    FF_CODEC_DECODE_CB(mss1_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+    .decode         = mss1_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("MS Screen 1"),
 };

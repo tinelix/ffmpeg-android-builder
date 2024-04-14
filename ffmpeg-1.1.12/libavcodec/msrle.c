@@ -1,6 +1,6 @@
 /*
  * Microsoft RLE video decoder
- * Copyright (C) 2003 The FFmpeg project
+ * Copyright (C) 2003 the ffmpeg project
  *
  * This file is part of FFmpeg.
  *
@@ -28,19 +28,22 @@
  * The MS RLE decoder outputs PAL8 colorspace data.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "dsputil.h"
 #include "msrledec.h"
 #include "libavutil/imgutils.h"
 
 typedef struct MsrleContext {
     AVCodecContext *avctx;
-    AVFrame *frame;
+    AVFrame frame;
 
     GetByteContext gb;
+    const unsigned char *buf;
+    int size;
 
     uint32_t pal[256];
 } MsrleContext;
@@ -65,12 +68,11 @@ static av_cold int msrle_decode_init(AVCodecContext *avctx)
         break;
     default:
         av_log(avctx, AV_LOG_ERROR, "unsupported bits per sample\n");
-        return AVERROR_INVALIDDATA;
+        return -1;
     }
 
-    s->frame = av_frame_alloc();
-    if (!s->frame)
-        return AVERROR(ENOMEM);
+    avcodec_get_frame_defaults(&s->frame);
+    s->frame.data[0] = NULL;
 
     if (avctx->extradata_size >= 4)
         for (i = 0; i < FFMIN(avctx->extradata_size, AVPALETTE_SIZE)/4; i++)
@@ -79,44 +81,42 @@ static av_cold int msrle_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int msrle_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
-                              int *got_frame, AVPacket *avpkt)
+static int msrle_decode_frame(AVCodecContext *avctx,
+                              void *data, int *got_frame,
+                              AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     MsrleContext *s = avctx->priv_data;
     int istride = FFALIGN(avctx->width*avctx->bits_per_coded_sample, 32) / 8;
-    int ret;
 
-    if (buf_size < 2) //Minimally a end of picture code should be there
-        return AVERROR_INVALIDDATA;
+    s->buf = buf;
+    s->size = buf_size;
 
-    if ((ret = ff_reget_buffer(avctx, s->frame, 0)) < 0)
-        return ret;
+    s->frame.reference = 3;
+    s->frame.buffer_hints = FF_BUFFER_HINTS_VALID | FF_BUFFER_HINTS_PRESERVE | FF_BUFFER_HINTS_REUSABLE;
+    if (avctx->reget_buffer(avctx, &s->frame)) {
+        av_log(avctx, AV_LOG_ERROR, "reget_buffer() failed\n");
+        return -1;
+    }
 
     if (avctx->bits_per_coded_sample > 1 && avctx->bits_per_coded_sample <= 8) {
-#if FF_API_PALETTE_HAS_CHANGED
-FF_DISABLE_DEPRECATION_WARNINGS
-        s->frame->palette_has_changed =
-#endif
-        ff_copy_palette(s->pal, avpkt, avctx);
-#if FF_API_PALETTE_HAS_CHANGED
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
+        const uint8_t *pal = av_packet_get_side_data(avpkt, AV_PKT_DATA_PALETTE, NULL);
 
+        if (pal) {
+            s->frame.palette_has_changed = 1;
+            memcpy(s->pal, pal, AVPALETTE_SIZE);
+        }
         /* make the palette available */
-        memcpy(s->frame->data[1], s->pal, AVPALETTE_SIZE);
+        memcpy(s->frame.data[1], s->pal, AVPALETTE_SIZE);
     }
 
     /* FIXME how to correctly detect RLE ??? */
     if (avctx->height * istride == avpkt->size) { /* assume uncompressed */
         int linesize = av_image_get_linesize(avctx->pix_fmt, avctx->width, 0);
-        uint8_t *ptr = s->frame->data[0];
-        const uint8_t *buf = avpkt->data + (avctx->height-1)*istride;
+        uint8_t *ptr = s->frame.data[0];
+        uint8_t *buf = avpkt->data + (avctx->height-1)*istride;
         int i, j;
-
-        if (linesize < 0)
-            return linesize;
 
         for (i = 0; i < avctx->height; i++) {
             if (avctx->bits_per_coded_sample == 4) {
@@ -130,27 +130,18 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 memcpy(ptr, buf, linesize);
             }
             buf -= istride;
-            ptr += s->frame->linesize[0];
+            ptr += s->frame.linesize[0];
         }
     } else {
         bytestream2_init(&s->gb, buf, buf_size);
-        ff_msrle_decode(avctx, s->frame, avctx->bits_per_coded_sample, &s->gb);
+        ff_msrle_decode(avctx, (AVPicture*)&s->frame, avctx->bits_per_coded_sample, &s->gb);
     }
 
-    if ((ret = av_frame_ref(rframe, s->frame)) < 0)
-        return ret;
-
     *got_frame      = 1;
+    *(AVFrame*)data = s->frame;
 
     /* report that the buffer was completely consumed */
     return buf_size;
-}
-
-static void msrle_decode_flush(AVCodecContext *avctx)
-{
-    MsrleContext *s = avctx->priv_data;
-
-    av_frame_unref(s->frame);
 }
 
 static av_cold int msrle_decode_end(AVCodecContext *avctx)
@@ -158,20 +149,20 @@ static av_cold int msrle_decode_end(AVCodecContext *avctx)
     MsrleContext *s = avctx->priv_data;
 
     /* release the last frame */
-    av_frame_free(&s->frame);
+    if (s->frame.data[0])
+        avctx->release_buffer(avctx, &s->frame);
 
     return 0;
 }
 
-const FFCodec ff_msrle_decoder = {
-    .p.name         = "msrle",
-    CODEC_LONG_NAME("Microsoft RLE"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_MSRLE,
+AVCodec ff_msrle_decoder = {
+    .name           = "msrle",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_MSRLE,
     .priv_data_size = sizeof(MsrleContext),
     .init           = msrle_decode_init,
     .close          = msrle_decode_end,
-    FF_CODEC_DECODE_CB(msrle_decode_frame),
-    .flush          = msrle_decode_flush,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode         = msrle_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Microsoft RLE"),
 };

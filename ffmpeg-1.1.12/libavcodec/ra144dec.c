@@ -23,10 +23,10 @@
  */
 
 #include "libavutil/channel_layout.h"
+#include "libavutil/intmath.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 #include "ra144.h"
 
 
@@ -35,19 +35,21 @@ static av_cold int ra144_decode_init(AVCodecContext * avctx)
     RA144Context *ractx = avctx->priv_data;
 
     ractx->avctx = avctx;
-    ff_audiodsp_init(&ractx->adsp);
 
     ractx->lpc_coef[0] = ractx->lpc_tables[0];
     ractx->lpc_coef[1] = ractx->lpc_tables[1];
 
-    av_channel_layout_uninit(&avctx->ch_layout);
-    avctx->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    avctx->channels       = 1;
+    avctx->channel_layout = AV_CH_LAYOUT_MONO;
     avctx->sample_fmt     = AV_SAMPLE_FMT_S16;
+
+    avcodec_get_frame_defaults(&ractx->frame);
+    avctx->coded_frame = &ractx->frame;
 
     return 0;
 }
 
-static void do_output_subblock(RA144Context *ractx, const int16_t  *lpc_coefs,
+static void do_output_subblock(RA144Context *ractx, const uint16_t  *lpc_coefs,
                                int gval, GetBitContext *gb)
 {
     int cba_idx = get_bits(gb, 7); // index of the adaptive CB, 0 if none
@@ -60,14 +62,14 @@ static void do_output_subblock(RA144Context *ractx, const int16_t  *lpc_coefs,
 }
 
 /** Uncompress one block (20 bytes -> 160*2 bytes). */
-static int ra144_decode_frame(AVCodecContext * avctx, AVFrame *frame,
+static int ra144_decode_frame(AVCodecContext * avctx, void *data,
                               int *got_frame_ptr, AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     static const uint8_t sizes[LPC_ORDER] = {6, 5, 5, 4, 4, 3, 3, 3, 3, 2};
     unsigned int refl_rms[NBLOCKS];           // RMS of the reflection coefficients
-    int16_t block_coefs[NBLOCKS][LPC_ORDER];  // LPC coefficients of each sub-block
+    uint16_t block_coefs[NBLOCKS][LPC_ORDER]; // LPC coefficients of each sub-block
     unsigned int lpc_refl[LPC_ORDER];         // LPC reflection coefficients of the frame
     int i, j;
     int ret;
@@ -77,20 +79,21 @@ static int ra144_decode_frame(AVCodecContext * avctx, AVFrame *frame,
     RA144Context *ractx = avctx->priv_data;
     GetBitContext gb;
 
-    if (buf_size < FRAME_SIZE) {
+    /* get output buffer */
+    ractx->frame.nb_samples = NBLOCKS * BLOCKSIZE;
+    if ((ret = ff_get_buffer(avctx, &ractx->frame)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
+        return ret;
+    }
+    samples = (int16_t *)ractx->frame.data[0];
+
+    if(buf_size < FRAMESIZE) {
         av_log(avctx, AV_LOG_ERROR,
                "Frame too small (%d bytes). Truncated file?\n", buf_size);
         *got_frame_ptr = 0;
-        return AVERROR_INVALIDDATA;
+        return buf_size;
     }
-
-    /* get output buffer */
-    frame->nb_samples = NBLOCKS * BLOCKSIZE;
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
-        return ret;
-    samples = (int16_t *)frame->data[0];
-
-    init_get_bits8(&gb, buf, FRAME_SIZE);
+    init_get_bits(&gb, buf, FRAMESIZE * 8);
 
     for (i = 0; i < LPC_ORDER; i++)
         lpc_refl[i] = ff_lpc_refl_cb[i][get_bits(&gb, sizes[i])];
@@ -113,7 +116,7 @@ static int ra144_decode_frame(AVCodecContext * avctx, AVFrame *frame,
         do_output_subblock(ractx, block_coefs[i], refl_rms[i], &gb);
 
         for (j=0; j < BLOCKSIZE; j++)
-            *samples++ = av_clip_int16(ractx->curr_sblock[j + 10] * (1 << 2));
+            *samples++ = av_clip_int16(ractx->curr_sblock[j + 10] << 2);
     }
 
     ractx->old_energy = energy;
@@ -121,18 +124,19 @@ static int ra144_decode_frame(AVCodecContext * avctx, AVFrame *frame,
 
     FFSWAP(unsigned int *, ractx->lpc_coef[0], ractx->lpc_coef[1]);
 
-    *got_frame_ptr = 1;
+    *got_frame_ptr   = 1;
+    *(AVFrame *)data = ractx->frame;
 
-    return FRAME_SIZE;
+    return FRAMESIZE;
 }
 
-const FFCodec ff_ra_144_decoder = {
-    .p.name         = "real_144",
-    CODEC_LONG_NAME("RealAudio 1.0 (14.4K)"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_RA_144,
+AVCodec ff_ra_144_decoder = {
+    .name           = "real_144",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_RA_144,
     .priv_data_size = sizeof(RA144Context),
     .init           = ra144_decode_init,
-    FF_CODEC_DECODE_CB(ra144_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .decode         = ra144_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("RealAudio 1.0 (14.4K)"),
 };

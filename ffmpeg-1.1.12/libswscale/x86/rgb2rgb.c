@@ -27,11 +27,10 @@
 
 #include "config.h"
 #include "libavutil/attributes.h"
+#include "libavutil/x86/asm.h"
 #include "libavutil/x86/cpu.h"
 #include "libavutil/cpu.h"
 #include "libavutil/bswap.h"
-#include "libavutil/mem_internal.h"
-
 #include "libswscale/rgb2rgb.h"
 #include "libswscale/swscale.h"
 #include "libswscale/swscale_internal.h"
@@ -40,7 +39,12 @@
 
 DECLARE_ASM_CONST(8, uint64_t, mmx_ff)       = 0x00000000000000FFULL;
 DECLARE_ASM_CONST(8, uint64_t, mmx_null)     = 0x0000000000000000ULL;
+DECLARE_ASM_CONST(8, uint64_t, mmx_one)      = 0xFFFFFFFFFFFFFFFFULL;
+DECLARE_ASM_CONST(8, uint64_t, mask32b)      = 0x000000FF000000FFULL;
+DECLARE_ASM_CONST(8, uint64_t, mask32g)      = 0x0000FF000000FF00ULL;
+DECLARE_ASM_CONST(8, uint64_t, mask32r)      = 0x00FF000000FF0000ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask32a)      = 0xFF000000FF000000ULL;
+DECLARE_ASM_CONST(8, uint64_t, mask32)       = 0x00FFFFFF00FFFFFFULL;
 DECLARE_ASM_CONST(8, uint64_t, mask3216br)   = 0x00F800F800F800F8ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask3216g)    = 0x0000FC000000FC00ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask3215g)    = 0x0000F8000000F800ULL;
@@ -51,6 +55,9 @@ DECLARE_ASM_CONST(8, uint64_t, mask24g)      = 0xFF0000FF0000FF00ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask24r)      = 0x0000FF0000FF0000ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask24l)      = 0x0000000000FFFFFFULL;
 DECLARE_ASM_CONST(8, uint64_t, mask24h)      = 0x0000FFFFFF000000ULL;
+DECLARE_ASM_CONST(8, uint64_t, mask24hh)     = 0xffff000000000000ULL;
+DECLARE_ASM_CONST(8, uint64_t, mask24hhh)    = 0xffffffff00000000ULL;
+DECLARE_ASM_CONST(8, uint64_t, mask24hhhh)   = 0xffffffffffff0000ULL;
 DECLARE_ASM_CONST(8, uint64_t, mask15b)      = 0x001F001F001F001FULL; /* 00000000 00011111  xxB */
 DECLARE_ASM_CONST(8, uint64_t, mask15rg)     = 0x7FE07FE07FE07FE0ULL; /* 01111111 11100000  RGx */
 DECLARE_ASM_CONST(8, uint64_t, mask15s)      = 0xFFE0FFE0FFE0FFE0ULL;
@@ -69,10 +76,7 @@ DECLARE_ASM_CONST(8, uint64_t, mul15_mid)    = 0x4200420042004200ULL;
 DECLARE_ASM_CONST(8, uint64_t, mul15_hi)     = 0x0210021002100210ULL;
 DECLARE_ASM_CONST(8, uint64_t, mul16_mid)    = 0x2080208020802080ULL;
 
-DECLARE_ALIGNED(8, extern const uint64_t, ff_bgr2YOffset);
-DECLARE_ALIGNED(8, extern const uint64_t, ff_w1111);
-DECLARE_ALIGNED(8, extern const uint64_t, ff_bgr2UVOffset);
-
+#define RGB2YUV_SHIFT 8
 #define BY ((int)( 0.098*(1<<RGB2YUV_SHIFT)+0.5))
 #define BV ((int)(-0.071*(1<<RGB2YUV_SHIFT)+0.5))
 #define BU ((int)( 0.439*(1<<RGB2YUV_SHIFT)+0.5))
@@ -85,26 +89,38 @@ DECLARE_ALIGNED(8, extern const uint64_t, ff_bgr2UVOffset);
 
 // Note: We have C, MMX, MMXEXT, 3DNOW versions, there is no 3DNOW + MMXEXT one.
 
+#define COMPILE_TEMPLATE_MMXEXT 0
+#define COMPILE_TEMPLATE_AMD3DNOW 0
 #define COMPILE_TEMPLATE_SSE2 0
-#define COMPILE_TEMPLATE_AVX 0
+
+//MMX versions
+#undef RENAME
+#define RENAME(a) a ## _MMX
+#include "rgb2rgb_template.c"
 
 // MMXEXT versions
 #undef RENAME
-#define RENAME(a) a ## _mmxext
+#undef COMPILE_TEMPLATE_MMXEXT
+#define COMPILE_TEMPLATE_MMXEXT 1
+#define RENAME(a) a ## _MMXEXT
 #include "rgb2rgb_template.c"
 
 //SSE2 versions
 #undef RENAME
 #undef COMPILE_TEMPLATE_SSE2
 #define COMPILE_TEMPLATE_SSE2 1
-#define RENAME(a) a ## _sse2
+#define RENAME(a) a ## _SSE2
 #include "rgb2rgb_template.c"
 
-//AVX versions
+//3DNOW versions
 #undef RENAME
-#undef COMPILE_TEMPLATE_AVX
-#define COMPILE_TEMPLATE_AVX 1
-#define RENAME(a) a ## _avx
+#undef COMPILE_TEMPLATE_MMXEXT
+#undef COMPILE_TEMPLATE_SSE2
+#undef COMPILE_TEMPLATE_AMD3DNOW
+#define COMPILE_TEMPLATE_MMXEXT 0
+#define COMPILE_TEMPLATE_SSE2 0
+#define COMPILE_TEMPLATE_AMD3DNOW 1
+#define RENAME(a) a ## _3DNOW
 #include "rgb2rgb_template.c"
 
 /*
@@ -116,66 +132,18 @@ DECLARE_ALIGNED(8, extern const uint64_t, ff_bgr2UVOffset);
 
 #endif /* HAVE_INLINE_ASM */
 
-void ff_shuffle_bytes_2103_mmxext(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_2103_ssse3(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_0321_ssse3(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_1230_ssse3(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_3012_ssse3(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_3210_ssse3(const uint8_t *src, uint8_t *dst, int src_size);
-
-#if ARCH_X86_64
-void ff_shuffle_bytes_2103_avx2(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_0321_avx2(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_1230_avx2(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_3012_avx2(const uint8_t *src, uint8_t *dst, int src_size);
-void ff_shuffle_bytes_3210_avx2(const uint8_t *src, uint8_t *dst, int src_size);
-
-void ff_uyvytoyuv422_sse2(uint8_t *ydst, uint8_t *udst, uint8_t *vdst,
-                          const uint8_t *src, int width, int height,
-                          int lumStride, int chromStride, int srcStride);
-void ff_uyvytoyuv422_avx(uint8_t *ydst, uint8_t *udst, uint8_t *vdst,
-                         const uint8_t *src, int width, int height,
-                         int lumStride, int chromStride, int srcStride);
-#endif
-
 av_cold void rgb2rgb_init_x86(void)
 {
+#if HAVE_INLINE_ASM
     int cpu_flags = av_get_cpu_flags();
 
-#if HAVE_INLINE_ASM
+    if (INLINE_MMX(cpu_flags))
+        rgb2rgb_init_MMX();
+    if (INLINE_AMD3DNOW(cpu_flags))
+        rgb2rgb_init_3DNOW();
     if (INLINE_MMXEXT(cpu_flags))
-        rgb2rgb_init_mmxext();
+        rgb2rgb_init_MMXEXT();
     if (INLINE_SSE2(cpu_flags))
-        rgb2rgb_init_sse2();
-    if (INLINE_AVX(cpu_flags))
-        rgb2rgb_init_avx();
+        rgb2rgb_init_SSE2();
 #endif /* HAVE_INLINE_ASM */
-
-    if (EXTERNAL_MMXEXT(cpu_flags)) {
-        shuffle_bytes_2103 = ff_shuffle_bytes_2103_mmxext;
-    }
-    if (EXTERNAL_SSE2(cpu_flags)) {
-#if ARCH_X86_64
-        uyvytoyuv422 = ff_uyvytoyuv422_sse2;
-#endif
-    }
-    if (EXTERNAL_SSSE3(cpu_flags)) {
-        shuffle_bytes_0321 = ff_shuffle_bytes_0321_ssse3;
-        shuffle_bytes_2103 = ff_shuffle_bytes_2103_ssse3;
-        shuffle_bytes_1230 = ff_shuffle_bytes_1230_ssse3;
-        shuffle_bytes_3012 = ff_shuffle_bytes_3012_ssse3;
-        shuffle_bytes_3210 = ff_shuffle_bytes_3210_ssse3;
-    }
-#if ARCH_X86_64
-    if (EXTERNAL_AVX2_FAST(cpu_flags)) {
-        shuffle_bytes_0321 = ff_shuffle_bytes_0321_avx2;
-        shuffle_bytes_2103 = ff_shuffle_bytes_2103_avx2;
-        shuffle_bytes_1230 = ff_shuffle_bytes_1230_avx2;
-        shuffle_bytes_3012 = ff_shuffle_bytes_3012_avx2;
-        shuffle_bytes_3210 = ff_shuffle_bytes_3210_avx2;
-    }
-    if (EXTERNAL_AVX(cpu_flags)) {
-        uyvytoyuv422 = ff_uyvytoyuv422_avx;
-    }
-#endif
 }

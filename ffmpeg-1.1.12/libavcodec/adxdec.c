@@ -22,9 +22,8 @@
 #include "libavutil/intreadwrite.h"
 #include "avcodec.h"
 #include "adx.h"
-#include "codec_internal.h"
-#include "decode.h"
 #include "get_bits.h"
+#include "internal.h"
 
 /**
  * @file
@@ -35,86 +34,26 @@
  * adx2wav & wav2adx http://www.geocities.co.jp/Playtown/2004/
  */
 
-/**
- * Decode ADX stream header.
- * Sets avctx->channels and avctx->sample_rate.
- *
- * @param      avctx        codec context
- * @param      buf          header data
- * @param      bufsize      data size, should be at least 24 bytes
- * @param[out] header_size  size of ADX header
- * @param[out] coeff        2 LPC coefficients, can be NULL
- * @return data offset or negative error code if header is invalid
- */
-static int adx_decode_header(AVCodecContext *avctx, const uint8_t *buf,
-                             int bufsize, int *header_size, int *coeff)
-{
-    int offset, cutoff, channels;
-
-    if (bufsize < 24)
-        return AVERROR_INVALIDDATA;
-
-    if (AV_RB16(buf) != 0x8000)
-        return AVERROR_INVALIDDATA;
-    offset = AV_RB16(buf + 2) + 4;
-
-    /* if copyright string is within the provided data, validate it */
-    if (bufsize >= offset && offset >= 6 && memcmp(buf + offset - 6, "(c)CRI", 6))
-        return AVERROR_INVALIDDATA;
-
-    /* check for encoding=3 block_size=18, sample_size=4 */
-    if (buf[4] != 3 || buf[5] != 18 || buf[6] != 4) {
-        avpriv_request_sample(avctx, "Support for this ADX format");
-        return AVERROR_PATCHWELCOME;
-    }
-
-    /* channels */
-    channels = buf[7];
-    if (channels <= 0 || channels > MAX_CHANNELS)
-        return AVERROR_INVALIDDATA;
-
-    if (avctx->ch_layout.nb_channels != channels) {
-        av_channel_layout_uninit(&avctx->ch_layout);
-        avctx->ch_layout.order = AV_CHANNEL_ORDER_UNSPEC;
-        avctx->ch_layout.nb_channels = channels;
-    }
-
-    /* sample rate */
-    avctx->sample_rate = AV_RB32(buf + 8);
-    if (avctx->sample_rate < 1 ||
-        avctx->sample_rate > INT_MAX / (channels * BLOCK_SIZE * 8))
-        return AVERROR_INVALIDDATA;
-
-    /* bit rate */
-    avctx->bit_rate = avctx->sample_rate * channels * BLOCK_SIZE * 8 / BLOCK_SAMPLES;
-
-    /* LPC coefficients */
-    if (coeff) {
-        cutoff = AV_RB16(buf + 16);
-        ff_adx_calculate_coeffs(cutoff, avctx->sample_rate, COEFF_BITS, coeff);
-    }
-
-    *header_size = offset;
-    return 0;
-}
-
 static av_cold int adx_decode_init(AVCodecContext *avctx)
 {
     ADXContext *c = avctx->priv_data;
     int ret, header_size;
 
     if (avctx->extradata_size >= 24) {
-        if ((ret = adx_decode_header(avctx, avctx->extradata,
-                                     avctx->extradata_size, &header_size,
-                                     c->coeff)) < 0) {
+        if ((ret = avpriv_adx_decode_header(avctx, avctx->extradata,
+                                            avctx->extradata_size, &header_size,
+                                            c->coeff)) < 0) {
             av_log(avctx, AV_LOG_ERROR, "error parsing ADX header\n");
             return AVERROR_INVALIDDATA;
         }
-        c->channels      = avctx->ch_layout.nb_channels;
+        c->channels      = avctx->channels;
         c->header_parsed = 1;
     }
 
     avctx->sample_fmt = AV_SAMPLE_FMT_S16P;
+
+    avcodec_get_frame_defaults(&c->frame);
+    avctx->coded_frame = &c->frame;
 
     return 0;
 }
@@ -145,7 +84,7 @@ static int adx_decode(ADXContext *c, int16_t *out, int offset,
     s2 = prev->s2;
     for (i = 0; i < BLOCK_SAMPLES; i++) {
         d  = get_sbits(&gb, 4);
-        s0 = d * scale + ((c->coeff[0] * s1 + c->coeff[1] * s2) >> COEFF_BITS);
+        s0 = ((d << COEFF_BITS) * scale + c->coeff[0] * s1 + c->coeff[1] * s2) >> COEFF_BITS;
         s2 = s1;
         s1 = av_clip_int16(s0);
         *out++ = s1;
@@ -156,7 +95,7 @@ static int adx_decode(ADXContext *c, int16_t *out, int offset,
     return 0;
 }
 
-static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+static int adx_decode_frame(AVCodecContext *avctx, void *data,
                             int *got_frame_ptr, AVPacket *avpkt)
 {
     int buf_size        = avpkt->size;
@@ -166,22 +105,6 @@ static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     const uint8_t *buf  = avpkt->data;
     const uint8_t *buf_end = buf + avpkt->size;
     int num_blocks, ch, ret;
-    size_t new_extradata_size;
-    uint8_t *new_extradata;
-
-    new_extradata = av_packet_get_side_data(avpkt, AV_PKT_DATA_NEW_EXTRADATA,
-                                            &new_extradata_size);
-    if (new_extradata && new_extradata_size > 0) {
-        int header_size;
-        if ((ret = adx_decode_header(avctx, new_extradata,
-                                     new_extradata_size, &header_size,
-                                     c->coeff)) < 0) {
-            av_log(avctx, AV_LOG_ERROR, "error parsing new ADX extradata\n");
-            return AVERROR_INVALIDDATA;
-        }
-
-        c->eof = 0;
-    }
 
     if (c->eof) {
         *got_frame_ptr = 0;
@@ -190,12 +113,12 @@ static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
 
     if (!c->header_parsed && buf_size >= 2 && AV_RB16(buf) == 0x8000) {
         int header_size;
-        if ((ret = adx_decode_header(avctx, buf, buf_size, &header_size,
-                                     c->coeff)) < 0) {
+        if ((ret = avpriv_adx_decode_header(avctx, buf, buf_size, &header_size,
+                                            c->coeff)) < 0) {
             av_log(avctx, AV_LOG_ERROR, "error parsing ADX header\n");
             return AVERROR_INVALIDDATA;
         }
-        c->channels      = avctx->ch_layout.nb_channels;
+        c->channels      = avctx->channels;
         c->header_parsed = 1;
         if (buf_size < header_size)
             return AVERROR_INVALIDDATA;
@@ -210,7 +133,7 @@ static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
 
     /* if the packet is not an even multiple of BLOCK_SIZE, check for an EOF
        packet */
-    if (!num_blocks || buf_size % (BLOCK_SIZE * c->channels)) {
+    if (!num_blocks || buf_size % (BLOCK_SIZE * avctx->channels)) {
         if (buf_size >= 4 && (AV_RB16(buf) & 0x8000)) {
             c->eof = 1;
             *got_frame_ptr = 0;
@@ -220,10 +143,12 @@ static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     }
 
     /* get output buffer */
-    frame->nb_samples = num_blocks * BLOCK_SAMPLES;
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
+    c->frame.nb_samples = num_blocks * BLOCK_SAMPLES;
+    if ((ret = ff_get_buffer(avctx, &c->frame)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
-    samples = (int16_t **)frame->extended_data;
+    }
+    samples = (int16_t **)c->frame.extended_data;
     samples_offset = 0;
 
     while (num_blocks--) {
@@ -236,12 +161,11 @@ static int adx_decode_frame(AVCodecContext *avctx, AVFrame *frame,
             buf_size -= BLOCK_SIZE;
             buf      += BLOCK_SIZE;
         }
-        if (!c->eof)
-            samples_offset += BLOCK_SAMPLES;
+        samples_offset += BLOCK_SAMPLES;
     }
 
-    frame->nb_samples = samples_offset;
-    *got_frame_ptr = 1;
+    *got_frame_ptr   = 1;
+    *(AVFrame *)data = c->frame;
 
     return buf - avpkt->data;
 }
@@ -253,17 +177,16 @@ static void adx_decode_flush(AVCodecContext *avctx)
     c->eof = 0;
 }
 
-const FFCodec ff_adpcm_adx_decoder = {
-    .p.name         = "adpcm_adx",
-    CODEC_LONG_NAME("SEGA CRI ADX ADPCM"),
-    .p.type         = AVMEDIA_TYPE_AUDIO,
-    .p.id           = AV_CODEC_ID_ADPCM_ADX,
+AVCodec ff_adpcm_adx_decoder = {
+    .name           = "adpcm_adx",
+    .type           = AVMEDIA_TYPE_AUDIO,
+    .id             = AV_CODEC_ID_ADPCM_ADX,
     .priv_data_size = sizeof(ADXContext),
     .init           = adx_decode_init,
-    FF_CODEC_DECODE_CB(adx_decode_frame),
+    .decode         = adx_decode_frame,
     .flush          = adx_decode_flush,
-    .p.capabilities = AV_CODEC_CAP_CHANNEL_CONF |
-                      AV_CODEC_CAP_DR1,
-    .p.sample_fmts  = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_S16P,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("SEGA CRI ADX ADPCM"),
+    .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_S16P,
                                                       AV_SAMPLE_FMT_NONE },
 };

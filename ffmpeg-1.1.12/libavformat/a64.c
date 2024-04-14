@@ -19,16 +19,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/intreadwrite.h"
-#include "libavcodec/codec_id.h"
-#include "libavcodec/codec_par.h"
+#include "libavcodec/avcodec.h"
+#include "libavcodec/a64enc.h"
+#include "libavcodec/bytestream.h"
 #include "avformat.h"
-#include "mux.h"
 #include "rawenc.h"
 
-static int a64_write_header(AVFormatContext *s)
+static int a64_write_header(struct AVFormatContext *s)
 {
-    AVCodecParameters *par = s->streams[0]->codecpar;
+    AVCodecContext *avctx = s->streams[0]->codec;
     uint8_t header[5] = {
         0x00, //load
         0x40, //address
@@ -36,38 +35,29 @@ static int a64_write_header(AVFormatContext *s)
         0x00, //charset_lifetime (multi only)
         0x00  //fps in 50/fps;
     };
-
-    if (par->extradata_size < 4) {
-        av_log(s, AV_LOG_ERROR, "Missing extradata\n");
-        return AVERROR_INVALIDDATA;
-    }
-
-    switch (par->codec_id) {
+    switch (avctx->codec->id) {
     case AV_CODEC_ID_A64_MULTI:
         header[2] = 0x00;
-        header[3] = AV_RB32(par->extradata+0);
+        header[3] = AV_RB32(avctx->extradata+0);
         header[4] = 2;
         break;
     case AV_CODEC_ID_A64_MULTI5:
         header[2] = 0x01;
-        header[3] = AV_RB32(par->extradata+0);
+        header[3] = AV_RB32(avctx->extradata+0);
         header[4] = 3;
         break;
     default:
-        return AVERROR_INVALIDDATA;
+        return AVERROR(EINVAL);
     }
     avio_write(s->pb, header, 2);
     return 0;
 }
 
-const FFOutputFormat ff_a64_muxer = {
-    .p.name         = "a64",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("a64 - video for Commodore 64"),
-    .p.extensions   = "a64, A64",
-    .p.video_codec  = AV_CODEC_ID_A64_MULTI,
-    .p.audio_codec    = AV_CODEC_ID_NONE,
-    .p.subtitle_codec = AV_CODEC_ID_NONE,
-    .flags_internal   = FF_OFMT_FLAG_MAX_ONE_OF_EACH,
+AVOutputFormat ff_a64_muxer = {
+    .name           = "a64",
+    .long_name      = NULL_IF_CONFIG_SMALL("a64 - video for Commodore 64"),
+    .extensions     = "a64, A64",
+    .video_codec    = AV_CODEC_ID_A64_MULTI,
     .write_header   = a64_write_header,
     .write_packet   = ff_raw_write_packet,
 };

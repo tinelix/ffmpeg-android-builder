@@ -23,103 +23,138 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "libavutil/buffer.h"
-#include "libavutil/cpu.h"
-#include "libavutil/hwcontext.h"
-#include "libavutil/pixfmt.h"
+#include "libavutil/avassert.h"
+#include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 
 #include "avfilter.h"
-#include "avfilter_internal.h"
-#include "framepool.h"
 #include "internal.h"
 #include "video.h"
 
-const AVFilterPad ff_video_default_filterpad[1] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_VIDEO,
-    }
-};
-
-AVFrame *ff_null_get_video_buffer(AVFilterLink *link, int w, int h)
+AVFilterBufferRef *ff_null_get_video_buffer(AVFilterLink *link, int perms, int w, int h)
 {
-    return ff_get_video_buffer(link->dst->outputs[0], w, h);
+    return ff_get_video_buffer(link->dst->outputs[0], perms, w, h);
 }
 
-AVFrame *ff_default_get_video_buffer2(AVFilterLink *link, int w, int h, int align)
+AVFilterBufferRef *ff_default_get_video_buffer(AVFilterLink *link, int perms, int w, int h)
 {
-    FilterLinkInternal *const li = ff_link_internal(link);
-    AVFrame *frame = NULL;
-    int pool_width = 0;
-    int pool_height = 0;
-    int pool_align = 0;
-    enum AVPixelFormat pool_format = AV_PIX_FMT_NONE;
+    int linesize[4];
+    uint8_t *data[4];
+    int i;
+    AVFilterBufferRef *picref = NULL;
+    AVFilterPool *pool = link->pool;
+    int full_perms = AV_PERM_READ | AV_PERM_WRITE | AV_PERM_PRESERVE |
+                     AV_PERM_REUSE | AV_PERM_REUSE2 | AV_PERM_ALIGN;
 
-    if (link->hw_frames_ctx &&
-        ((AVHWFramesContext*)link->hw_frames_ctx->data)->format == link->format) {
-        int ret;
-        frame = av_frame_alloc();
+    av_assert1(!(perms & ~(full_perms | AV_PERM_NEG_LINESIZES)));
 
-        if (!frame)
-            return NULL;
-
-        ret = av_hwframe_get_buffer(link->hw_frames_ctx, frame, 0);
-        if (ret < 0)
-            av_frame_free(&frame);
-
-        return frame;
-    }
-
-    if (!li->frame_pool) {
-        li->frame_pool = ff_frame_pool_video_init(av_buffer_allocz, w, h,
-                                                  link->format, align);
-        if (!li->frame_pool)
-            return NULL;
+    if (pool) {
+        for (i = 0; i < POOL_SIZE; i++) {
+            picref = pool->pic[i];
+            if (picref && picref->buf->format == link->format && picref->buf->w == w && picref->buf->h == h) {
+                AVFilterBuffer *pic = picref->buf;
+                pool->pic[i] = NULL;
+                pool->count--;
+                av_assert0(!picref->video->qp_table);
+                picref->video->w = w;
+                picref->video->h = h;
+                picref->perms = full_perms;
+                picref->format = link->format;
+                pic->refcount = 1;
+                memcpy(picref->data,     pic->data,     sizeof(picref->data));
+                memcpy(picref->linesize, pic->linesize, sizeof(picref->linesize));
+                pool->refcount++;
+                return picref;
+            }
+        }
     } else {
-        if (ff_frame_pool_get_video_config(li->frame_pool,
-                                           &pool_width, &pool_height,
-                                           &pool_format, &pool_align) < 0) {
-            return NULL;
-        }
-
-        if (pool_width != w || pool_height != h ||
-            pool_format != link->format || pool_align != align) {
-
-            ff_frame_pool_uninit(&li->frame_pool);
-            li->frame_pool = ff_frame_pool_video_init(av_buffer_allocz, w, h,
-                                                      link->format, align);
-            if (!li->frame_pool)
-                return NULL;
-        }
+        pool = link->pool = av_mallocz(sizeof(AVFilterPool));
+        pool->refcount = 1;
     }
 
-    frame = ff_frame_pool_get(li->frame_pool);
-    if (!frame)
+    // align: +2 is needed for swscaler, +16 to be SIMD-friendly
+    if ((i = av_image_alloc(data, linesize, w, h, link->format, 32)) < 0)
         return NULL;
 
-    frame->sample_aspect_ratio = link->sample_aspect_ratio;
-    frame->colorspace  = link->colorspace;
-    frame->color_range = link->color_range;
+    picref = avfilter_get_video_buffer_ref_from_arrays(data, linesize,
+                                                       full_perms, w, h, link->format);
+    if (!picref) {
+        av_free(data[0]);
+        return NULL;
+    }
 
-    return frame;
+    memset(data[0], 128, i);
+
+    picref->buf->priv = pool;
+    picref->buf->free = NULL;
+    pool->refcount++;
+
+    return picref;
 }
 
-AVFrame *ff_default_get_video_buffer(AVFilterLink *link, int w, int h)
+AVFilterBufferRef *
+avfilter_get_video_buffer_ref_from_arrays(uint8_t * const data[4], const int linesize[4], int perms,
+                                          int w, int h, enum AVPixelFormat format)
 {
-    return ff_default_get_video_buffer2(link, w, h, av_cpu_max_align());
+    AVFilterBuffer *pic = av_mallocz(sizeof(AVFilterBuffer));
+    AVFilterBufferRef *picref = av_mallocz(sizeof(AVFilterBufferRef));
+
+    if (!pic || !picref)
+        goto fail;
+
+    picref->buf = pic;
+    picref->buf->free = ff_avfilter_default_free_buffer;
+    if (!(picref->video = av_mallocz(sizeof(AVFilterBufferRefVideoProps))))
+        goto fail;
+
+    pic->w = picref->video->w = w;
+    pic->h = picref->video->h = h;
+
+    /* make sure the buffer gets read permission or it's useless for output */
+    picref->perms = perms | AV_PERM_READ;
+
+    pic->refcount = 1;
+    picref->type = AVMEDIA_TYPE_VIDEO;
+    pic->format = picref->format = format;
+
+    memcpy(pic->data,        data,          4*sizeof(data[0]));
+    memcpy(pic->linesize,    linesize,      4*sizeof(linesize[0]));
+    memcpy(picref->data,     pic->data,     sizeof(picref->data));
+    memcpy(picref->linesize, pic->linesize, sizeof(picref->linesize));
+
+    pic->   extended_data = pic->data;
+    picref->extended_data = picref->data;
+
+    picref->pts = AV_NOPTS_VALUE;
+
+    return picref;
+
+fail:
+    if (picref && picref->video)
+        av_free(picref->video);
+    av_free(picref);
+    av_free(pic);
+    return NULL;
 }
 
-AVFrame *ff_get_video_buffer(AVFilterLink *link, int w, int h)
+AVFilterBufferRef *ff_get_video_buffer(AVFilterLink *link, int perms, int w, int h)
 {
-    AVFrame *ret = NULL;
+    AVFilterBufferRef *ret = NULL;
 
-    FF_TPRINTF_START(NULL, get_video_buffer); ff_tlog_link(NULL, link, 1);
+    av_unused char buf[16];
+    FF_TPRINTF_START(NULL, get_video_buffer); ff_tlog_link(NULL, link, 0);
+    ff_tlog(NULL, " perms:%s w:%d h:%d\n", ff_get_ref_perms_string(buf, sizeof(buf), perms), w, h);
 
-    if (link->dstpad->get_buffer.video)
-        ret = link->dstpad->get_buffer.video(link, w, h);
+    if (link->dstpad->get_video_buffer)
+        ret = link->dstpad->get_video_buffer(link, perms, w, h);
 
     if (!ret)
-        ret = ff_default_get_video_buffer(link, w, h);
+        ret = ff_default_get_video_buffer(link, perms, w, h);
+
+    if (ret)
+        ret->type = AVMEDIA_TYPE_VIDEO;
+
+    FF_TPRINTF_START(NULL, get_video_buffer); ff_tlog_link(NULL, link, 0); ff_tlog(NULL, " returning "); ff_tlog_ref(NULL, ret, 1);
 
     return ret;
 }

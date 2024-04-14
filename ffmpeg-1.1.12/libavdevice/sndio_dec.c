@@ -22,15 +22,11 @@
 #include <stdint.h>
 #include <sndio.h>
 
-#include "libavutil/internal.h"
-#include "libavutil/opt.h"
-#include "libavutil/time.h"
-
 #include "libavformat/avformat.h"
-#include "libavformat/demux.h"
 #include "libavformat/internal.h"
+#include "libavutil/opt.h"
 
-#include "libavdevice/sndio.h"
+#include "sndio_common.h"
 
 static av_cold int audio_read_header(AVFormatContext *s1)
 {
@@ -42,15 +38,15 @@ static av_cold int audio_read_header(AVFormatContext *s1)
     if (!st)
         return AVERROR(ENOMEM);
 
-    ret = ff_sndio_open(s1, 0, s1->url);
+    ret = ff_sndio_open(s1, 0, s1->filename);
     if (ret < 0)
         return ret;
 
     /* take real parameters */
-    st->codecpar->codec_type  = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->codec_id    = s->codec_id;
-    st->codecpar->sample_rate = s->sample_rate;
-    st->codecpar->ch_layout.nb_channels = s->channels;
+    st->codec->codec_type  = AVMEDIA_TYPE_AUDIO;
+    st->codec->codec_id    = s->codec_id;
+    st->codec->sample_rate = s->sample_rate;
+    st->codec->channels    = s->channels;
 
     avpriv_set_pts_info(st, 64, 1, 1000000);  /* 64 bits pts in us */
 
@@ -68,7 +64,7 @@ static int audio_read_packet(AVFormatContext *s1, AVPacket *pkt)
 
     ret = sio_read(s->hdl, pkt->data, pkt->size);
     if (ret == 0 || sio_eof(s->hdl)) {
-        av_packet_unref(pkt);
+        av_free_packet(pkt);
         return AVERROR_EOF;
     }
 
@@ -107,16 +103,15 @@ static const AVClass sndio_demuxer_class = {
     .item_name      = av_default_item_name,
     .option         = options,
     .version        = LIBAVUTIL_VERSION_INT,
-    .category       = AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT,
 };
 
-const FFInputFormat ff_sndio_demuxer = {
-    .p.name         = "sndio",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("sndio audio capture"),
-    .p.flags        = AVFMT_NOFILE,
-    .p.priv_class   = &sndio_demuxer_class,
+AVInputFormat ff_sndio_demuxer = {
+    .name           = "sndio",
+    .long_name      = NULL_IF_CONFIG_SMALL("sndio audio capture"),
     .priv_data_size = sizeof(SndioData),
     .read_header    = audio_read_header,
     .read_packet    = audio_read_packet,
     .read_close     = audio_read_close,
+    .flags          = AVFMT_NOFILE,
+    .priv_class     = &sndio_demuxer_class,
 };

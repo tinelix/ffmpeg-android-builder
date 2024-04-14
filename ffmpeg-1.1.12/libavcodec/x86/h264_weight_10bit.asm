@@ -5,20 +5,20 @@
 ;*
 ;* Authors: Daniel Kang <daniel.d.kang@gmail.com>
 ;*
-;* This file is part of FFmpeg.
+;* This file is part of Libav.
 ;*
-;* FFmpeg is free software; you can redistribute it and/or
+;* Libav is free software; you can redistribute it and/or
 ;* modify it under the terms of the GNU Lesser General Public
 ;* License as published by the Free Software Foundation; either
 ;* version 2.1 of the License, or (at your option) any later version.
 ;*
-;* FFmpeg is distributed in the hope that it will be useful,
+;* Libav is distributed in the hope that it will be useful,
 ;* but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ;* Lesser General Public License for more details.
 ;*
 ;* You should have received a copy of the GNU Lesser General Public
-;* License along with FFmpeg; if not, write to the Free Software
+;* License along with Libav; if not, write to the Free Software
 ;* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 ;******************************************************************************
 
@@ -26,18 +26,17 @@
 
 SECTION_RODATA 32
 
+pw_pixel_max: times 8 dw ((1 << 10)-1)
 sq_1: dq 1
       dq 0
 
 cextern pw_1
-cextern pw_1023
-%define pw_pixel_max pw_1023
 
 SECTION .text
 
 ;-----------------------------------------------------------------------------
-; void ff_h264_weight_16_10(uint8_t *dst, int stride, int height,
-;                           int log2_denom, int weight, int offset);
+; void h264_weight(uint8_t *dst, int stride, int height, int log2_denom,
+;                  int weight, int offset);
 ;-----------------------------------------------------------------------------
 %macro WEIGHT_PROLOGUE 0
 .prologue:
@@ -101,7 +100,7 @@ cglobal h264_weight_16_10
     add       r0, r1
     dec       r2d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2
@@ -120,7 +119,7 @@ cglobal h264_weight_8_10
     add        r0, r1
     dec        r2d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2
@@ -142,7 +141,7 @@ cglobal h264_weight_4_10
     add         r0, r3
     dec         r2d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2
@@ -152,9 +151,8 @@ WEIGHT_FUNC_HALF_MM
 
 
 ;-----------------------------------------------------------------------------
-; void ff_h264_biweight_16_10(uint8_t *dst, uint8_t *src, int stride,
-;                             int height, int log2_denom, int weightd,
-;                             int weights, int offset);
+; void h264_biweight(uint8_t *dst, uint8_t *src, int stride, int height,
+;                    int log2_denom, int weightd, int weights, int offset);
 ;-----------------------------------------------------------------------------
 %if ARCH_X86_32
 DECLARE_REG_TMP 3
@@ -234,7 +232,7 @@ cglobal h264_biweight_16_10
     add       r1, r2
     dec       r3d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2
@@ -253,7 +251,7 @@ cglobal h264_biweight_8_10
     add      r1, r2
     dec      r3d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2
@@ -275,7 +273,7 @@ cglobal h264_biweight_4_10
     add         r1, r4
     dec         r3d
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 INIT_XMM sse2

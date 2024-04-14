@@ -21,17 +21,31 @@
 
 #include "libavutil/common.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/imgutils.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
-static int ptx_decode_frame(AVCodecContext *avctx, AVFrame *p,
-                            int *got_frame, AVPacket *avpkt)
-{
+typedef struct PTXContext {
+    AVFrame picture;
+} PTXContext;
+
+static av_cold int ptx_init(AVCodecContext *avctx) {
+    PTXContext *s = avctx->priv_data;
+
+    avcodec_get_frame_defaults(&s->picture);
+    avctx->coded_frame= &s->picture;
+
+    return 0;
+}
+
+static int ptx_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                            AVPacket *avpkt) {
     const uint8_t *buf = avpkt->data;
     const uint8_t *buf_end = avpkt->data + avpkt->size;
+    PTXContext * const s = avctx->priv_data;
+    AVFrame *picture = data;
+    AVFrame * const p = &s->picture;
     unsigned int offset, w, h, y, stride, bytes_per_pixel;
-    int ret;
     uint8_t *ptr;
 
     if (buf_end - buf < 14)
@@ -42,7 +56,7 @@ static int ptx_decode_frame(AVCodecContext *avctx, AVFrame *p,
     bytes_per_pixel = AV_RL16(buf+12) >> 3;
 
     if (bytes_per_pixel != 2) {
-        avpriv_request_sample(avctx, "Image format not RGB15");
+        av_log_ask_for_sample(avctx, "Image format is not RGB15.\n");
         return AVERROR_PATCHWELCOME;
     }
 
@@ -51,18 +65,21 @@ static int ptx_decode_frame(AVCodecContext *avctx, AVFrame *p,
     if (buf_end - buf < offset)
         return AVERROR_INVALIDDATA;
     if (offset != 0x2c)
-        avpriv_request_sample(avctx, "offset != 0x2c");
+        av_log_ask_for_sample(avctx, "offset != 0x2c\n");
 
     buf += offset;
 
-    if (buf_end - buf < w * bytes_per_pixel)
-        return AVERROR_INVALIDDATA;
+    if (p->data[0])
+        avctx->release_buffer(avctx, p);
 
-    if ((ret = ff_set_dimensions(avctx, w, h)) < 0)
-        return ret;
-
-    if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
-        return ret;
+    if (av_image_check_size(w, h, 0, avctx))
+        return -1;
+    if (w != avctx->width || h != avctx->height)
+        avcodec_set_dimensions(avctx, w, h);
+    if (ff_get_buffer(avctx, p) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
+        return -1;
+    }
 
     p->pict_type = AV_PICTURE_TYPE_I;
 
@@ -75,6 +92,7 @@ static int ptx_decode_frame(AVCodecContext *avctx, AVFrame *p,
         buf += w*bytes_per_pixel;
     }
 
+    *picture = s->picture;
     *got_frame = 1;
 
     if (y < h) {
@@ -85,11 +103,23 @@ static int ptx_decode_frame(AVCodecContext *avctx, AVFrame *p,
     return offset + w*h*bytes_per_pixel;
 }
 
-const FFCodec ff_ptx_decoder = {
-    .p.name         = "ptx",
-    CODEC_LONG_NAME("V.Flash PTX image"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_PTX,
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    FF_CODEC_DECODE_CB(ptx_decode_frame),
+static av_cold int ptx_end(AVCodecContext *avctx) {
+    PTXContext *s = avctx->priv_data;
+
+    if(s->picture.data[0])
+        avctx->release_buffer(avctx, &s->picture);
+
+    return 0;
+}
+
+AVCodec ff_ptx_decoder = {
+    .name           = "ptx",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_PTX,
+    .priv_data_size = sizeof(PTXContext),
+    .init           = ptx_init,
+    .close          = ptx_end,
+    .decode         = ptx_decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("V.Flash PTX image"),
 };

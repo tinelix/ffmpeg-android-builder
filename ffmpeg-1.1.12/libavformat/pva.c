@@ -20,8 +20,6 @@
  */
 
 #include "avformat.h"
-#include "avio_internal.h"
-#include "demux.h"
 #include "internal.h"
 #include "mpeg.h"
 
@@ -30,7 +28,7 @@
 #define PVA_AUDIO_PAYLOAD       0x02
 #define PVA_MAGIC               (('A' << 8) + 'V')
 
-typedef struct PVAContext {
+typedef struct {
     int continue_pes;
 } PVAContext;
 
@@ -42,7 +40,7 @@ static int pva_check(const uint8_t *p) {
     return length + 8;
 }
 
-static int pva_probe(const AVProbeData * pd) {
+static int pva_probe(AVProbeData * pd) {
     const unsigned char *buf = pd->buf;
     int len = pva_check(buf);
 
@@ -51,7 +49,7 @@ static int pva_probe(const AVProbeData * pd) {
 
     if (pd->buf_size >= len + 8 &&
         pva_check(buf + len) >= 0)
-        return AVPROBE_SCORE_EXTENSION;
+        return AVPROBE_SCORE_MAX / 2;
 
     return AVPROBE_SCORE_MAX / 4;
 }
@@ -61,17 +59,17 @@ static int pva_read_header(AVFormatContext *s) {
 
     if (!(st = avformat_new_stream(s, NULL)))
         return AVERROR(ENOMEM);
-    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-    st->codecpar->codec_id   = AV_CODEC_ID_MPEG2VIDEO;
-    ffstream(st)->need_parsing = AVSTREAM_PARSE_FULL;
+    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codec->codec_id   = AV_CODEC_ID_MPEG2VIDEO;
+    st->need_parsing      = AVSTREAM_PARSE_FULL;
     avpriv_set_pts_info(st, 32, 1, 90000);
     av_add_index_entry(st, 0, 0, 0, 0, AVINDEX_KEYFRAME);
 
     if (!(st = avformat_new_stream(s, NULL)))
         return AVERROR(ENOMEM);
-    st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->codec_id   = AV_CODEC_ID_MP2;
-    ffstream(st)->need_parsing = AVSTREAM_PARSE_FULL;
+    st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+    st->codec->codec_id   = AV_CODEC_ID_MP2;
+    st->need_parsing      = AVSTREAM_PARSE_FULL;
     avpriv_set_pts_info(st, 33, 1, 90000);
     av_add_index_entry(st, 0, 0, 0, 0, AVINDEX_KEYFRAME);
 
@@ -87,7 +85,6 @@ static int read_part_of_packet(AVFormatContext *s, int64_t *pts,
     PVAContext *pvactx = s->priv_data;
     int syncword, streamid, reserved, flags, length, pts_flag;
     int64_t pva_pts = AV_NOPTS_VALUE, startpos;
-    int ret;
 
 recover:
     startpos = avio_tell(pb);
@@ -136,12 +133,8 @@ recover:
             pes_flags              = avio_rb16(pb);
             pes_header_data_length = avio_r8(pb);
 
-            if (avio_feof(pb)) {
-                return AVERROR_EOF;
-            }
-
-            if (pes_signal != 1 || pes_header_data_length == 0) {
-                pva_log(s, AV_LOG_WARNING, "expected non empty signaled PES packet, "
+            if (pes_signal != 1) {
+                pva_log(s, AV_LOG_WARNING, "expected signaled PES packet, "
                                           "trying to recover\n");
                 avio_skip(pb, length - 9);
                 if (!read_packet)
@@ -149,23 +142,15 @@ recover:
                 goto recover;
             }
 
-            ret = ffio_read_size(pb, pes_header_data, pes_header_data_length);
-            if (ret < 0)
-                return ret;
+            avio_read(pb, pes_header_data, pes_header_data_length);
             length -= 9 + pes_header_data_length;
 
             pes_packet_length -= 3 + pes_header_data_length;
 
             pvactx->continue_pes = pes_packet_length;
 
-            if (pes_flags & 0x80 && (pes_header_data[0] & 0xf0) == 0x20) {
-                if (pes_header_data_length < 5) {
-                    pva_log(s, AV_LOG_ERROR, "header too short\n");
-                    avio_skip(pb, length);
-                    return AVERROR_INVALIDDATA;
-                }
+            if (pes_flags & 0x80 && (pes_header_data[0] & 0xf0) == 0x20)
                 pva_pts = ff_parse_pes_pts(pes_header_data);
-            }
         }
 
         pvactx->continue_pes -= length;
@@ -229,9 +214,9 @@ static int64_t pva_read_timestamp(struct AVFormatContext *s, int stream_index,
     return res;
 }
 
-const FFInputFormat ff_pva_demuxer = {
-    .p.name         = "pva",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("TechnoTrend PVA"),
+AVInputFormat ff_pva_demuxer = {
+    .name           = "pva",
+    .long_name      = NULL_IF_CONFIG_SMALL("TechnoTrend PVA"),
     .priv_data_size = sizeof(PVAContext),
     .read_probe     = pva_probe,
     .read_header    = pva_read_header,

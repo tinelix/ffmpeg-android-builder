@@ -22,8 +22,7 @@
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 #include "libavutil/opt.h"
 
 typedef struct {
@@ -39,16 +38,24 @@ static av_cold int decode_init(AVCodecContext *avctx)
     }
     avctx->pix_fmt = AV_PIX_FMT_UYVY422;
 
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
+
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
-                        int *got_frame, AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                        AVPacket *avpkt)
 {
     FRWUContext *s = avctx->priv_data;
     int field, ret;
+    AVFrame *pic = avctx->coded_frame;
     const uint8_t *buf = avpkt->data;
     const uint8_t *buf_end = buf + avpkt->size;
+
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
 
     if (avpkt->size < avctx->width * 2 * avctx->height + 4 + 2*8) {
         av_log(avctx, AV_LOG_ERROR, "Packet is too small.\n");
@@ -59,11 +66,14 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
+    pic->reference = 0;
+    if ((ret = ff_get_buffer(avctx, pic)) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "get_buffer() failed\n");
         return ret;
+    }
 
     pic->pict_type = AV_PICTURE_TYPE_I;
-    pic->flags |= AV_FRAME_FLAG_KEY;
+    pic->key_frame = 1;
 
     for (field = 0; field < 2; field++) {
         int i;
@@ -98,12 +108,23 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
     }
 
     *got_frame = 1;
+    *(AVFrame*)data = *pic;
 
     return avpkt->size;
 }
 
+static av_cold int decode_close(AVCodecContext *avctx)
+{
+    AVFrame *pic = avctx->coded_frame;
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
 static const AVOption frwu_options[] = {
-    {"change_field_order", "Change field order", offsetof(FRWUContext, change_field_order), AV_OPT_TYPE_BOOL,
+    {"change_field_order", "Change field order", offsetof(FRWUContext, change_field_order), FF_OPT_TYPE_INT,
      {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM | AV_OPT_FLAG_VIDEO_PARAM},
     {NULL}
 };
@@ -115,14 +136,15 @@ static const AVClass frwu_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const FFCodec ff_frwu_decoder = {
-    .p.name         = "frwu",
-    CODEC_LONG_NAME("Forward Uncompressed"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_FRWU,
+AVCodec ff_frwu_decoder = {
+    .name           = "frwu",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_FRWU,
     .priv_data_size = sizeof(FRWUContext),
     .init           = decode_init,
-    FF_CODEC_DECODE_CB(decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .p.priv_class   = &frwu_class,
+    .close          = decode_close,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
+    .long_name      = NULL_IF_CONFIG_SMALL("Forward Uncompressed"),
+    .priv_class     = &frwu_class,
 };

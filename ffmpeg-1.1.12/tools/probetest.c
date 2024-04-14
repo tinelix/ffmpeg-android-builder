@@ -21,38 +21,22 @@
 #include <stdlib.h>
 
 #include "libavformat/avformat.h"
-#include "libavformat/demux.h"
 #include "libavcodec/put_bits.h"
 #include "libavutil/lfg.h"
-#include "libavutil/mem.h"
-#include "libavutil/timer.h"
 
-#define MAX_FORMATS 1000 //this must be larger than the number of formats
-static int score_array[MAX_FORMATS];
-static int64_t time_array[MAX_FORMATS];
+static int score_array[1000]; //this must be larger than the number of formats
 static int failures = 0;
-static const char *single_format;
-
-#ifndef AV_READ_TIME
-#define AV_READ_TIME(x) 0
-#endif
 
 static void probe(AVProbeData *pd, int type, int p, int size)
 {
     int i = 0;
-    const AVInputFormat *fmt = NULL;
-    void *fmt_opaque = NULL;
+    AVInputFormat *fmt = NULL;
 
-    while ((fmt = av_demuxer_iterate(&fmt_opaque))) {
+    while ((fmt = av_iformat_next(fmt))) {
         if (fmt->flags & AVFMT_NOFILE)
             continue;
-        if (ffifmt(fmt)->read_probe &&
-            (!single_format || !strcmp(single_format, fmt->name))
-        ) {
-            int score;
-            int64_t start = AV_READ_TIME();
-            score = ffifmt(fmt)->read_probe(pd);
-            time_array[i] += AV_READ_TIME() - start;
+        if (fmt->read_probe) {
+            int score = fmt->read_probe(pd);
             if (score > score_array[i] && score > AVPROBE_SCORE_MAX / 4) {
                 score_array[i] = score;
                 fprintf(stderr,
@@ -65,58 +49,19 @@ static void probe(AVProbeData *pd, int type, int p, int size)
     }
 }
 
-static void print_times(void)
-{
-    int i = 0;
-    const AVInputFormat *fmt = NULL;
-    void *fmt_opaque = NULL;
-
-    while ((fmt = av_demuxer_iterate(&fmt_opaque))) {
-        if (fmt->flags & AVFMT_NOFILE)
-            continue;
-        if (time_array[i] > 1000000) {
-            fprintf(stderr, "%12"PRIu64" cycles, %12s\n",
-                    time_array[i], fmt->name);
-        }
-        i++;
-    }
-}
-
-static int read_int(char *arg) {
-    int ret;
-
-    if (!arg || !*arg)
-        return -1;
-    ret = strtol(arg, &arg, 0);
-    if (*arg)
-        return -1;
-    return ret;
-}
-
 int main(int argc, char **argv)
 {
     unsigned int p, i, type, size, retry;
-    AVProbeData pd = { 0 };
+    AVProbeData pd;
     AVLFG state;
     PutBitContext pb;
     int retry_count= 4097;
     int max_size = 65537;
-    int j;
 
-    for (j = i = 1; i<argc; i++) {
-        if (!strcmp(argv[i], "-f") && i+1<argc && !single_format) {
-            single_format = argv[++i];
-        } else if (read_int(argv[i])>0 && j == 1) {
-            retry_count = read_int(argv[i]);
-            j++;
-        } else if (read_int(argv[i])>0 && j == 2) {
-            max_size = read_int(argv[i]);
-            j++;
-        } else {
-            fprintf(stderr, "probetest [-f <input format>] [<retry_count> [<max_size>]]\n");
-            return 1;
-        }
-    }
+    if(argc >= 2)
+        retry_count = atoi(argv[1]);
+    if(argc >= 3)
+        max_size = atoi(argv[2]);
 
     if (max_size > 1000000000U/8) {
         fprintf(stderr, "max_size out of bounds\n");
@@ -128,6 +73,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    avcodec_register_all();
+    av_register_all();
+
     av_lfg_init(&state, 0xdeadbeef);
 
     pd.buf = NULL;
@@ -135,11 +83,6 @@ int main(int argc, char **argv)
         pd.buf_size = size;
         pd.buf      = av_realloc(pd.buf, size + AVPROBE_PADDING_SIZE);
         pd.filename = "";
-
-        if (!pd.buf) {
-            fprintf(stderr, "out of memory\n");
-            return 1;
-        }
 
         memset(pd.buf, 0, size + AVPROBE_PADDING_SIZE);
 
@@ -198,7 +141,5 @@ int main(int argc, char **argv)
             }
         }
     }
-    if(AV_READ_TIME())
-        print_times();
     return failures;
 }

@@ -21,32 +21,46 @@
  */
 
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "internal.h"
 
 static av_cold int yuv4_decode_init(AVCodecContext *avctx)
 {
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
+    avctx->coded_frame = avcodec_alloc_frame();
+
+    if (!avctx->coded_frame) {
+        av_log(avctx, AV_LOG_ERROR, "Could not allocate frame.\n");
+        return AVERROR(ENOMEM);
+    }
+
     return 0;
 }
 
-static int yuv4_decode_frame(AVCodecContext *avctx, AVFrame *pic,
+static int yuv4_decode_frame(AVCodecContext *avctx, void *data,
                              int *got_frame, AVPacket *avpkt)
 {
+    AVFrame *pic = avctx->coded_frame;
     const uint8_t *src = avpkt->data;
     uint8_t *y, *u, *v;
-    int i, j, ret;
+    int i, j;
+
+    if (pic->data[0])
+        avctx->release_buffer(avctx, pic);
 
     if (avpkt->size < 6 * (avctx->width + 1 >> 1) * (avctx->height + 1 >> 1)) {
         av_log(avctx, AV_LOG_ERROR, "Insufficient input data.\n");
         return AVERROR(EINVAL);
     }
 
-    if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
-        return ret;
+    pic->reference = 0;
 
-    pic->flags |= AV_FRAME_FLAG_KEY;
+    if (ff_get_buffer(avctx, pic) < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Could not allocate buffer.\n");
+        return AVERROR(ENOMEM);
+    }
+
+    pic->key_frame = 1;
     pic->pict_type = AV_PICTURE_TYPE_I;
 
     y = pic->data[0];
@@ -69,16 +83,28 @@ static int yuv4_decode_frame(AVCodecContext *avctx, AVFrame *pic,
     }
 
     *got_frame = 1;
+    *(AVFrame *)data = *pic;
 
     return avpkt->size;
 }
 
-const FFCodec ff_yuv4_decoder = {
-    .p.name       = "yuv4",
-    CODEC_LONG_NAME("Uncompressed packed 4:2:0"),
-    .p.type       = AVMEDIA_TYPE_VIDEO,
-    .p.id         = AV_CODEC_ID_YUV4,
+static av_cold int yuv4_decode_close(AVCodecContext *avctx)
+{
+    if (avctx->coded_frame->data[0])
+        avctx->release_buffer(avctx, avctx->coded_frame);
+
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_yuv4_decoder = {
+    .name         = "yuv4",
+    .type         = AVMEDIA_TYPE_VIDEO,
+    .id           = AV_CODEC_ID_YUV4,
     .init         = yuv4_decode_init,
-    FF_CODEC_DECODE_CB(yuv4_decode_frame),
-    .p.capabilities = AV_CODEC_CAP_DR1,
+    .decode       = yuv4_decode_frame,
+    .close        = yuv4_decode_close,
+    .capabilities = CODEC_CAP_DR1,
+    .long_name    = NULL_IF_CONFIG_SMALL("Uncompressed packed 4:2:0"),
 };

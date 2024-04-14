@@ -23,45 +23,24 @@
 
 #include "avcodec.h"
 #include "bytestream.h"
-#include "codec_internal.h"
-#include "encode.h"
 #include "internal.h"
-#include "v210enc.h"
-#include "v210enc_init.h"
-
-#define TYPE uint8_t
-#define DEPTH 8
-#define BYTES_PER_PIXEL 1
-#define RENAME(a) a ## _ ## 8
-#include "v210_template.c"
-#undef RENAME
-#undef DEPTH
-#undef BYTES_PER_PIXEL
-#undef TYPE
-
-#define TYPE uint16_t
-#define DEPTH 10
-#define BYTES_PER_PIXEL 2
-#define RENAME(a) a ## _ ## 10
-#include "v210_template.c"
-#undef RENAME
-#undef DEPTH
-#undef BYTES_PER_PIXEL
-#undef TYPE
 
 static av_cold int encode_init(AVCodecContext *avctx)
 {
-    V210EncContext *s = avctx->priv_data;
-
     if (avctx->width & 1) {
         av_log(avctx, AV_LOG_ERROR, "v210 needs even width\n");
         return AVERROR(EINVAL);
     }
 
-    ff_v210enc_init(s);
+    if (avctx->bits_per_raw_sample != 10)
+        av_log(avctx, AV_LOG_WARNING, "bits per raw sample: %d != 10-bit\n",
+               avctx->bits_per_raw_sample);
 
-    avctx->bits_per_coded_sample = 20;
-    avctx->bit_rate = ff_guess_coded_bitrate(avctx) * 16 / 15;
+    avctx->coded_frame = avcodec_alloc_frame();
+    if (!avctx->coded_frame)
+        return AVERROR(ENOMEM);
+
+    avctx->coded_frame->pict_type = AV_PICTURE_TYPE_I;
 
     return 0;
 }
@@ -71,51 +50,77 @@ static int encode_frame(AVCodecContext *avctx, AVPacket *pkt,
 {
     int aligned_width = ((avctx->width + 47) / 48) * 48;
     int stride = aligned_width * 8 / 3;
-    AVFrameSideData *side_data;
-    int ret;
-    uint8_t *dst;
+    int line_padding = stride - ((avctx->width * 8 + 11) / 12) * 4;
+    int h, w, ret;
+    const uint16_t *y = (const uint16_t*)pic->data[0];
+    const uint16_t *u = (const uint16_t*)pic->data[1];
+    const uint16_t *v = (const uint16_t*)pic->data[2];
+    PutByteContext p;
 
-    ret = ff_get_encode_buffer(avctx, pkt, avctx->height * stride, 0);
-    if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "Error getting output packet.\n");
+    if ((ret = ff_alloc_packet2(avctx, pkt, avctx->height * stride)) < 0)
         return ret;
+
+    bytestream2_init_writer(&p, pkt->data, pkt->size);
+
+#define CLIP(v) av_clip(v, 4, 1019)
+
+#define WRITE_PIXELS(a, b, c)           \
+    do {                                \
+        val =   CLIP(*a++);             \
+        val |= (CLIP(*b++) << 10) |     \
+               (CLIP(*c++) << 20);      \
+        bytestream2_put_le32u(&p, val); \
+    } while (0)
+
+    for (h = 0; h < avctx->height; h++) {
+        uint32_t val;
+        for (w = 0; w < avctx->width - 5; w += 6) {
+            WRITE_PIXELS(u, y, v);
+            WRITE_PIXELS(y, u, y);
+            WRITE_PIXELS(v, y, u);
+            WRITE_PIXELS(y, v, y);
+        }
+        if (w < avctx->width - 1) {
+            WRITE_PIXELS(u, y, v);
+
+            val = CLIP(*y++);
+            if (w == avctx->width - 2)
+                bytestream2_put_le32u(&p, val);
+            if (w < avctx->width - 3) {
+                val |= (CLIP(*u++) << 10) | (CLIP(*y++) << 20);
+                bytestream2_put_le32u(&p, val);
+
+                val = CLIP(*v++) | (CLIP(*y++) << 10);
+                bytestream2_put_le32u(&p, val);
+            }
+        }
+
+        bytestream2_set_buffer(&p, 0, line_padding);
+
+        y += pic->linesize[0] / 2 - avctx->width;
+        u += pic->linesize[1] / 2 - avctx->width / 2;
+        v += pic->linesize[2] / 2 - avctx->width / 2;
     }
-    dst = pkt->data;
 
-    if (pic->format == AV_PIX_FMT_YUV422P10)
-        v210_enc_10(avctx, dst, pic);
-    else if(pic->format == AV_PIX_FMT_YUV422P)
-        v210_enc_8(avctx, dst, pic);
-
-    side_data = av_frame_get_side_data(pic, AV_FRAME_DATA_A53_CC);
-    if (side_data && side_data->size) {
-        uint8_t *buf = av_packet_new_side_data(pkt, AV_PKT_DATA_A53_CC, side_data->size);
-        if (!buf)
-            return AVERROR(ENOMEM);
-        memcpy(buf, side_data->data, side_data->size);
-    }
-
-    side_data = av_frame_get_side_data(pic, AV_FRAME_DATA_AFD);
-    if (side_data && side_data->size) {
-        uint8_t *buf = av_packet_new_side_data(pkt, AV_PKT_DATA_AFD, side_data->size);
-        if (!buf)
-            return AVERROR(ENOMEM);
-        memcpy(buf, side_data->data, side_data->size);
-    }
-
+    pkt->flags |= AV_PKT_FLAG_KEY;
     *got_packet = 1;
     return 0;
 }
 
-const FFCodec ff_v210_encoder = {
-    .p.name         = "v210",
-    CODEC_LONG_NAME("Uncompressed 4:2:2 10-bit"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_V210,
-    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
-                      AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
-    .priv_data_size = sizeof(V210EncContext),
+static av_cold int encode_close(AVCodecContext *avctx)
+{
+    av_freep(&avctx->coded_frame);
+
+    return 0;
+}
+
+AVCodec ff_v210_encoder = {
+    .name           = "v210",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_V210,
     .init           = encode_init,
-    FF_CODEC_ENCODE_CB(encode_frame),
-    .p.pix_fmts     = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV422P, AV_PIX_FMT_NONE },
+    .encode2        = encode_frame,
+    .close          = encode_close,
+    .pix_fmts       = (const enum AVPixelFormat[]){ AV_PIX_FMT_YUV422P10, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("Uncompressed 4:2:2 10-bit"),
 };

@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2002-2014 Michael Niedermayer <michaelni@gmx.at>
+ * Copyright (c) 2002-2003 Michael Niedermayer <michaelni@gmx.at>
  *
- * see https://multimedia.cx/huffyuv.txt for a description of
+ * see http://www.pcisys.net/~melanson/codecs/huffyuv.txt for a description of
  * the algorithm used
  *
  * This file is part of FFmpeg.
@@ -31,7 +31,12 @@
 
 #include <stdint.h>
 
-#include "config.h"
+#include "avcodec.h"
+#include "dsputil.h"
+#include "get_bits.h"
+#include "put_bits.h"
+
+#define VLC_BITS 11
 
 #if HAVE_BIGENDIAN
 #define B 3
@@ -45,16 +50,43 @@
 #define A 3
 #endif
 
-#define MAX_BITS 16
-#define MAX_N (1<<MAX_BITS)
-#define MAX_VLC_N 16384
-
 typedef enum Predictor {
     LEFT = 0,
     PLANE,
     MEDIAN,
 } Predictor;
 
-int ff_huffyuv_generate_bits_table(uint32_t *dst, const uint8_t *len_table, int n);
+typedef struct HYuvContext {
+    AVCodecContext *avctx;
+    Predictor predictor;
+    GetBitContext gb;
+    PutBitContext pb;
+    int interlaced;
+    int decorrelate;
+    int bitstream_bpp;
+    int version;
+    int yuy2;                               //use yuy2 instead of 422P
+    int bgr32;                              //use bgr32 instead of bgr24
+    int width, height;
+    int flags;
+    int context;
+    int picture_number;
+    int last_slice_end;
+    uint8_t *temp[3];
+    uint64_t stats[3][256];
+    uint8_t len[3][256];
+    uint32_t bits[3][256];
+    uint32_t pix_bgr_map[1<<VLC_BITS];
+    VLC vlc[6];                             //Y,U,V,YY,YU,YV
+    AVFrame picture;
+    uint8_t *bitstream_buffer;
+    unsigned int bitstream_buffer_size;
+    DSPContext dsp;
+} HYuvContext;
+
+void ff_huffyuv_common_init(AVCodecContext *s);
+void ff_huffyuv_common_end(HYuvContext *s);
+int  ff_huffyuv_alloc_temp(HYuvContext *s);
+int ff_huffyuv_generate_bits_table(uint32_t *dst, const uint8_t *len_table);
 
 #endif /* AVCODEC_HUFFYUV_H */

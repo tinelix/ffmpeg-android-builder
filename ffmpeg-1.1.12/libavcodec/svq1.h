@@ -3,8 +3,8 @@
  * ported to MPlayer by Arpi <arpi@thot.banki.hu>
  * ported to libavcodec by Nick Kurshev <nickols_k@mail.ru>
  *
- * Copyright (c) 2002 The Xine project
- * Copyright (c) 2002 The FFmpeg project
+ * Copyright (C) 2002 the xine project
+ * Copyright (C) 2002 the ffmpeg project
  *
  * SVQ1 Encoder (c) 2004 Mike Melanson <melanson@pcisys.net>
  *
@@ -37,21 +37,19 @@
 
 #include <stdint.h>
 
-#include "libavutil/attributes_internal.h"
-
 #define SVQ1_BLOCK_SKIP         0
 #define SVQ1_BLOCK_INTER        1
 #define SVQ1_BLOCK_INTER_4V     2
 #define SVQ1_BLOCK_INTRA        3
 
-#define SVQ1_BLOCK_SKIP_CODE    1
-#define SVQ1_BLOCK_SKIP_LEN     1
-#define SVQ1_BLOCK_INTER_CODE   1
-#define SVQ1_BLOCK_INTER_LEN    2
-#define SVQ1_BLOCK_INTRA_CODE   0
-#define SVQ1_BLOCK_INTRA_LEN    3
+struct svq1_frame_size {
+    uint16_t width;
+    uint16_t height;
+};
 
-FF_VISIBILITY_PUSH_HIDDEN
+uint16_t ff_svq1_packet_checksum(const uint8_t *data,
+                                 const int length, int value);
+
 extern const int8_t *const ff_svq1_inter_codebooks[6];
 extern const int8_t *const ff_svq1_intra_codebooks[6];
 
@@ -61,7 +59,6 @@ extern const uint8_t ff_svq1_inter_multistage_vlc[6][8][2];
 extern const uint16_t ff_svq1_intra_mean_vlc[256][2];
 extern const uint16_t ff_svq1_inter_mean_vlc[512][2];
 
-extern const uint16_t ff_svq1_frame_size_table[7][2];
-FF_VISIBILITY_POP_HIDDEN
+extern const struct svq1_frame_size ff_svq1_frame_size_table[7];
 
 #endif /* AVCODEC_SVQ1_H */

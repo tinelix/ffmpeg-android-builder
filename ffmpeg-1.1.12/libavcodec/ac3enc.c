@@ -26,34 +26,23 @@
  * The simplest AC-3 encoder.
  */
 
+//#define ASSERT_LEVEL 2
+
 #include <stdint.h>
 
-#include "libavutil/attributes.h"
 #include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/crc.h"
-#include "libavutil/emms.h"
-#include "libavutil/internal.h"
-#include "libavutil/mem.h"
-#include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
-#include "libavutil/thread.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "config_components.h"
-#include "encode.h"
-#include "me_cmp.h"
 #include "put_bits.h"
-#include "audiodsp.h"
+#include "dsputil.h"
 #include "ac3dsp.h"
 #include "ac3.h"
-#include "ac3defs.h"
-#include "ac3tab.h"
+#include "fft.h"
 #include "ac3enc.h"
 #include "eac3enc.h"
-
-#define SAMPLETYPE_SIZE(ctx) (sizeof(float) == sizeof(int32_t) ? sizeof(float) : \
-                                  (ctx)->fixed_point ? sizeof(int32_t) : sizeof(float))
 
 typedef struct AC3Mant {
     int16_t *qmant1_ptr, *qmant2_ptr, *qmant4_ptr; ///< mantissa pointers for bap=1,2,4
@@ -72,76 +61,10 @@ static const float surmixlev_options[SURMIXLEV_NUM_OPTIONS] = {
 
 #define EXTMIXLEV_NUM_OPTIONS 8
 static const float extmixlev_options[EXTMIXLEV_NUM_OPTIONS] = {
-    LEVEL_PLUS_3DB,  LEVEL_PLUS_1POINT5DB,  LEVEL_ONE,       LEVEL_MINUS_1POINT5DB,
+    LEVEL_PLUS_3DB,  LEVEL_PLUS_1POINT5DB,  LEVEL_ONE,       LEVEL_MINUS_4POINT5DB,
     LEVEL_MINUS_3DB, LEVEL_MINUS_4POINT5DB, LEVEL_MINUS_6DB, LEVEL_ZERO
 };
 
-/* The first two options apply only to the AC-3 encoders;
- * the rest is also valid for EAC-3. When modifying it,
- * it might be necessary to adapt said offset in eac3enc.c. */
-#define OFFSET(param) offsetof(AC3EncodeContext, options.param)
-#define AC3ENC_PARAM (AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_ENCODING_PARAM)
-const AVOption ff_ac3_enc_options[] = {
-/* AC-3 downmix levels */
-{"center_mixlev", "Center Mix Level", OFFSET(center_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = LEVEL_MINUS_4POINT5DB }, 0.0, 1.0, AC3ENC_PARAM},
-{"surround_mixlev", "Surround Mix Level", OFFSET(surround_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = LEVEL_MINUS_6DB }, 0.0, 1.0, AC3ENC_PARAM},
-/* audio production information */
-{"mixing_level", "Mixing Level", OFFSET(mixing_level), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, 111, AC3ENC_PARAM},
-{"room_type", "Room Type", OFFSET(room_type), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_SMALL_ROOM, AC3ENC_PARAM, .unit = "room_type"},
-    {"notindicated", "Not Indicated (default)", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_NOT_INDICATED }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "room_type"},
-    {"large",        "Large Room",              0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_LARGE_ROOM    }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "room_type"},
-    {"small",        "Small Room",              0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_SMALL_ROOM    }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "room_type"},
-/* Metadata Options */
-{"per_frame_metadata", "Allow Changing Metadata Per-Frame", OFFSET(allow_per_frame_metadata), AV_OPT_TYPE_BOOL, {.i64 = 0 }, 0, 1, AC3ENC_PARAM},
-{"copyright", "Copyright Bit", OFFSET(copyright), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, 1, AC3ENC_PARAM},
-{"dialnorm", "Dialogue Level (dB)", OFFSET(dialogue_level), AV_OPT_TYPE_INT, {.i64 = -31 }, -31, -1, AC3ENC_PARAM},
-{"dsur_mode", "Dolby Surround Mode", OFFSET(dolby_surround_mode), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_MODE_ON, AC3ENC_PARAM, .unit = "dsur_mode"},
-    {"notindicated", "Not Indicated (default)",    0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_NOT_INDICATED }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsur_mode"},
-    {"on",           "Dolby Surround Encoded",     0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_ON       }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsur_mode"},
-    {"off",          "Not Dolby Surround Encoded", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_OFF      }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsur_mode"},
-{"original", "Original Bit Stream", OFFSET(original), AV_OPT_TYPE_INT,   {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, 1, AC3ENC_PARAM},
-/* extended bitstream information */
-{"dmix_mode", "Preferred Stereo Downmix Mode", OFFSET(preferred_stereo_downmix), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_DOWNMIX_DPLII, AC3ENC_PARAM, .unit = "dmix_mode"},
-    {"notindicated", "Not Indicated (default)", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_NOT_INDICATED }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dmix_mode"},
-    {"ltrt", "Lt/Rt Downmix Preferred",         0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_DOWNMIX_LTRT  }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dmix_mode"},
-    {"loro", "Lo/Ro Downmix Preferred",         0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_DOWNMIX_LORO  }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dmix_mode"},
-    {"dplii", "Dolby Pro Logic II Downmix Preferred", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_DOWNMIX_DPLII }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dmix_mode"},
-{"ltrt_cmixlev", "Lt/Rt Center Mix Level", OFFSET(ltrt_center_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = -1.0 }, -1.0, 2.0, AC3ENC_PARAM},
-{"ltrt_surmixlev", "Lt/Rt Surround Mix Level", OFFSET(ltrt_surround_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = -1.0 }, -1.0, 2.0, AC3ENC_PARAM},
-{"loro_cmixlev", "Lo/Ro Center Mix Level", OFFSET(loro_center_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = -1.0 }, -1.0, 2.0, AC3ENC_PARAM},
-{"loro_surmixlev", "Lo/Ro Surround Mix Level", OFFSET(loro_surround_mix_level), AV_OPT_TYPE_FLOAT, {.dbl = -1.0 }, -1.0, 2.0, AC3ENC_PARAM},
-{"dsurex_mode", "Dolby Surround EX Mode", OFFSET(dolby_surround_ex_mode), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_DSUREX_DPLIIZ, AC3ENC_PARAM, .unit = "dsurex_mode"},
-    {"notindicated", "Not Indicated (default)",       0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_NOT_INDICATED }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsurex_mode"},
-    {"on",           "Dolby Surround EX Encoded",     0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_ON       }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsurex_mode"},
-    {"off",          "Not Dolby Surround EX Encoded", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_OFF      }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsurex_mode"},
-    {"dpliiz",       "Dolby Pro Logic IIz-encoded",   0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_DSUREX_DPLIIZ }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dsurex_mode"},
-{"dheadphone_mode", "Dolby Headphone Mode", OFFSET(dolby_headphone_mode), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_MODE_ON, AC3ENC_PARAM, .unit = "dheadphone_mode"},
-    {"notindicated", "Not Indicated (default)",     0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_NOT_INDICATED }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dheadphone_mode"},
-    {"on",           "Dolby Headphone Encoded",     0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_ON       }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dheadphone_mode"},
-    {"off",          "Not Dolby Headphone Encoded", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_MODE_OFF      }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "dheadphone_mode"},
-{"ad_conv_type", "A/D Converter Type", OFFSET(ad_converter_type), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_NONE }, AC3ENC_OPT_NONE, AC3ENC_OPT_ADCONV_HDCD, AC3ENC_PARAM, .unit = "ad_conv_type"},
-    {"standard", "Standard (default)", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_ADCONV_STANDARD }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "ad_conv_type"},
-    {"hdcd",     "HDCD",               0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_ADCONV_HDCD     }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "ad_conv_type"},
-/* Other Encoding Options */
-{"stereo_rematrixing", "Stereo Rematrixing", OFFSET(stereo_rematrixing), AV_OPT_TYPE_BOOL, {.i64 = 1 }, 0, 1, AC3ENC_PARAM},
-{"channel_coupling",   "Channel Coupling",   OFFSET(channel_coupling),   AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_AUTO }, AC3ENC_OPT_AUTO, AC3ENC_OPT_ON, AC3ENC_PARAM, .unit = "channel_coupling"},
-    {"auto", "Selected by the Encoder", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_AUTO }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "channel_coupling"},
-{"cpl_start_band", "Coupling Start Band", OFFSET(cpl_start), AV_OPT_TYPE_INT, {.i64 = AC3ENC_OPT_AUTO }, AC3ENC_OPT_AUTO, 15, AC3ENC_PARAM, .unit = "cpl_start_band"},
-    {"auto", "Selected by the Encoder", 0, AV_OPT_TYPE_CONST, {.i64 = AC3ENC_OPT_AUTO }, INT_MIN, INT_MAX, AC3ENC_PARAM, .unit = "cpl_start_band"},
-{NULL}
-};
-
-const AVClass ff_ac3enc_class = {
-    .class_name = "AC-3 Encoder",
-    .item_name  = av_default_item_name,
-    .option     = ff_ac3_enc_options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
-
-const FFCodecDefault ff_ac3_enc_defaults[] = {
-    { "b",  "0" },
-    { NULL }
-};
 
 /**
  * LUT for number of exponent groups.
@@ -153,55 +76,28 @@ static uint8_t exponent_group_tab[2][3][256];
 /**
  * List of supported channel layouts.
  */
-const AVChannelLayout ff_ac3_ch_layouts[19] = {
-    AV_CHANNEL_LAYOUT_MONO,
-    AV_CHANNEL_LAYOUT_STEREO,
-    AV_CHANNEL_LAYOUT_2_1,
-    AV_CHANNEL_LAYOUT_SURROUND,
-    AV_CHANNEL_LAYOUT_2_2,
-    AV_CHANNEL_LAYOUT_QUAD,
-    AV_CHANNEL_LAYOUT_4POINT0,
-    AV_CHANNEL_LAYOUT_5POINT0,
-    AV_CHANNEL_LAYOUT_5POINT0_BACK,
-    {
-        .nb_channels = 2,
-        .order       = AV_CHANNEL_ORDER_NATIVE,
-        .u.mask      = AV_CH_LAYOUT_MONO | AV_CH_LOW_FREQUENCY,
-    },
-    {
-        .nb_channels = 3,
-        .order       = AV_CHANNEL_ORDER_NATIVE,
-        .u.mask      = AV_CH_LAYOUT_STEREO | AV_CH_LOW_FREQUENCY,
-    },
-    {
-        .nb_channels = 4,
-        .order       = AV_CHANNEL_ORDER_NATIVE,
-        .u.mask      = AV_CH_LAYOUT_2_1 | AV_CH_LOW_FREQUENCY,
-    },
-    {
-        .nb_channels = 4,
-        .order       = AV_CHANNEL_ORDER_NATIVE,
-        .u.mask      = AV_CH_LAYOUT_SURROUND | AV_CH_LOW_FREQUENCY,
-    },
-    {
-        .nb_channels = 5,
-        .order       = AV_CHANNEL_ORDER_NATIVE,
-        .u.mask      = AV_CH_LAYOUT_4POINT0 | AV_CH_LOW_FREQUENCY,
-    },
-    AV_CHANNEL_LAYOUT_5POINT1,
-    AV_CHANNEL_LAYOUT_5POINT1_BACK,
-    { 0 },
+const uint64_t ff_ac3_channel_layouts[19] = {
+     AV_CH_LAYOUT_MONO,
+     AV_CH_LAYOUT_STEREO,
+     AV_CH_LAYOUT_2_1,
+     AV_CH_LAYOUT_SURROUND,
+     AV_CH_LAYOUT_2_2,
+     AV_CH_LAYOUT_QUAD,
+     AV_CH_LAYOUT_4POINT0,
+     AV_CH_LAYOUT_5POINT0,
+     AV_CH_LAYOUT_5POINT0_BACK,
+    (AV_CH_LAYOUT_MONO     | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_STEREO   | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_2_1      | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_SURROUND | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_2_2      | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_QUAD     | AV_CH_LOW_FREQUENCY),
+    (AV_CH_LAYOUT_4POINT0  | AV_CH_LOW_FREQUENCY),
+     AV_CH_LAYOUT_5POINT1,
+     AV_CH_LAYOUT_5POINT1_BACK,
+     0
 };
 
-/**
- * Table to remap channels from SMPTE order to AC-3 order.
- * [channel_mode][lfe][ch]
- */
-static const uint8_t ac3_enc_channel_map[8][2][6] = {
-    COMMON_CHANNEL_MAP
-    { { 0, 1, 2, 3,    }, { 0, 1, 3, 4, 2,   } },
-    { { 0, 2, 1, 3, 4, }, { 0, 2, 1, 4, 5, 3 } },
-};
 
 /**
  * LUT to select the bandwidth code based on the bit rate, sample rate, and
@@ -276,222 +172,13 @@ static const int8_t ac3_coupling_start_tab[6][3][19] = {
 };
 
 
-#define FLT_OPTION_THRESHOLD 0.01
-
-static int validate_float_option(float v, const float *v_list, int v_list_size)
-{
-    int i;
-
-    for (i = 0; i < v_list_size; i++) {
-        if (v < (v_list[i] + FLT_OPTION_THRESHOLD) &&
-            v > (v_list[i] - FLT_OPTION_THRESHOLD))
-            break;
-    }
-    if (i == v_list_size)
-        return AVERROR(EINVAL);
-
-    return i;
-}
-
-
-static void validate_mix_level(void *log_ctx, const char *opt_name,
-                               float *opt_param, const float *list,
-                               int list_size, int default_value, int min_value,
-                               int *ctx_param)
-{
-    int mixlev = validate_float_option(*opt_param, list, list_size);
-    if (mixlev < min_value) {
-        mixlev = default_value;
-        if (*opt_param >= 0.0) {
-            av_log(log_ctx, AV_LOG_WARNING, "requested %s is not valid. using "
-                   "default value: %0.3f\n", opt_name, list[mixlev]);
-        }
-    }
-    *opt_param = list[mixlev];
-    *ctx_param = mixlev;
-}
-
-
-/**
- * Validate metadata options as set by AVOption system.
- * These values can optionally be changed per-frame.
- *
- * @param s  AC-3 encoder private context
- */
-static int ac3_validate_metadata(AC3EncodeContext *s)
-{
-    AVCodecContext *avctx = s->avctx;
-    AC3EncOptions *opt = &s->options;
-
-    opt->audio_production_info = 0;
-    opt->extended_bsi_1        = 0;
-    opt->extended_bsi_2        = 0;
-    opt->eac3_mixing_metadata  = 0;
-    opt->eac3_info_metadata    = 0;
-
-    /* determine mixing metadata / xbsi1 use */
-    if (s->channel_mode > AC3_CHMODE_STEREO && opt->preferred_stereo_downmix != AC3ENC_OPT_NONE) {
-        opt->extended_bsi_1       = 1;
-        opt->eac3_mixing_metadata = 1;
-    }
-    if (s->has_center &&
-        (opt->ltrt_center_mix_level >= 0 || opt->loro_center_mix_level >= 0)) {
-        opt->extended_bsi_1       = 1;
-        opt->eac3_mixing_metadata = 1;
-    }
-    if (s->has_surround &&
-        (opt->ltrt_surround_mix_level >= 0 || opt->loro_surround_mix_level >= 0)) {
-        opt->extended_bsi_1       = 1;
-        opt->eac3_mixing_metadata = 1;
-    }
-
-    if (s->eac3) {
-        /* determine info metadata use */
-        if (avctx->audio_service_type != AV_AUDIO_SERVICE_TYPE_MAIN)
-            opt->eac3_info_metadata = 1;
-        if (opt->copyright != AC3ENC_OPT_NONE || opt->original != AC3ENC_OPT_NONE)
-            opt->eac3_info_metadata = 1;
-        if (s->channel_mode == AC3_CHMODE_STEREO &&
-            (opt->dolby_headphone_mode != AC3ENC_OPT_NONE || opt->dolby_surround_mode != AC3ENC_OPT_NONE))
-            opt->eac3_info_metadata = 1;
-        if (s->channel_mode >= AC3_CHMODE_2F2R && opt->dolby_surround_ex_mode != AC3ENC_OPT_NONE)
-            opt->eac3_info_metadata = 1;
-        if (opt->mixing_level != AC3ENC_OPT_NONE || opt->room_type != AC3ENC_OPT_NONE ||
-            opt->ad_converter_type != AC3ENC_OPT_NONE) {
-            opt->audio_production_info = 1;
-            opt->eac3_info_metadata    = 1;
-        }
-    } else {
-        /* determine audio production info use */
-        if (opt->mixing_level != AC3ENC_OPT_NONE || opt->room_type != AC3ENC_OPT_NONE)
-            opt->audio_production_info = 1;
-
-        /* determine xbsi2 use */
-        if (s->channel_mode >= AC3_CHMODE_2F2R && opt->dolby_surround_ex_mode != AC3ENC_OPT_NONE)
-            opt->extended_bsi_2 = 1;
-        if (s->channel_mode == AC3_CHMODE_STEREO && opt->dolby_headphone_mode != AC3ENC_OPT_NONE)
-            opt->extended_bsi_2 = 1;
-        if (opt->ad_converter_type != AC3ENC_OPT_NONE)
-            opt->extended_bsi_2 = 1;
-    }
-
-    /* validate AC-3 mixing levels */
-    if (!s->eac3) {
-        if (s->has_center) {
-            validate_mix_level(avctx, "center_mix_level", &opt->center_mix_level,
-                               cmixlev_options, CMIXLEV_NUM_OPTIONS, 1, 0,
-                               &s->center_mix_level);
-        }
-        if (s->has_surround) {
-            validate_mix_level(avctx, "surround_mix_level", &opt->surround_mix_level,
-                               surmixlev_options, SURMIXLEV_NUM_OPTIONS, 1, 0,
-                               &s->surround_mix_level);
-        }
-    }
-
-    /* validate extended bsi 1 / mixing metadata */
-    if (opt->extended_bsi_1 || opt->eac3_mixing_metadata) {
-        /* default preferred stereo downmix */
-        if (opt->preferred_stereo_downmix == AC3ENC_OPT_NONE)
-            opt->preferred_stereo_downmix = AC3ENC_OPT_NOT_INDICATED;
-        if (!s->eac3 || s->has_center) {
-            /* validate Lt/Rt center mix level */
-            validate_mix_level(avctx, "ltrt_center_mix_level",
-                               &opt->ltrt_center_mix_level, extmixlev_options,
-                               EXTMIXLEV_NUM_OPTIONS, 5, 0,
-                               &s->ltrt_center_mix_level);
-            /* validate Lo/Ro center mix level */
-            validate_mix_level(avctx, "loro_center_mix_level",
-                               &opt->loro_center_mix_level, extmixlev_options,
-                               EXTMIXLEV_NUM_OPTIONS, 5, 0,
-                               &s->loro_center_mix_level);
-        }
-        if (!s->eac3 || s->has_surround) {
-            /* validate Lt/Rt surround mix level */
-            validate_mix_level(avctx, "ltrt_surround_mix_level",
-                               &opt->ltrt_surround_mix_level, extmixlev_options,
-                               EXTMIXLEV_NUM_OPTIONS, 6, 3,
-                               &s->ltrt_surround_mix_level);
-            /* validate Lo/Ro surround mix level */
-            validate_mix_level(avctx, "loro_surround_mix_level",
-                               &opt->loro_surround_mix_level, extmixlev_options,
-                               EXTMIXLEV_NUM_OPTIONS, 6, 3,
-                               &s->loro_surround_mix_level);
-        }
-    }
-
-    /* validate audio service type / channels combination */
-    if ((avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_KARAOKE &&
-         avctx->ch_layout.nb_channels == 1) ||
-        ((avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_COMMENTARY ||
-          avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_EMERGENCY  ||
-          avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_VOICE_OVER)
-         && avctx->ch_layout.nb_channels > 1)) {
-        av_log(avctx, AV_LOG_ERROR, "invalid audio service type for the "
-                                    "specified number of channels\n");
-        return AVERROR(EINVAL);
-    }
-
-    /* validate extended bsi 2 / info metadata */
-    if (opt->extended_bsi_2 || opt->eac3_info_metadata) {
-        /* default dolby headphone mode */
-        if (opt->dolby_headphone_mode == AC3ENC_OPT_NONE)
-            opt->dolby_headphone_mode = AC3ENC_OPT_NOT_INDICATED;
-        /* default dolby surround ex mode */
-        if (opt->dolby_surround_ex_mode == AC3ENC_OPT_NONE)
-            opt->dolby_surround_ex_mode = AC3ENC_OPT_NOT_INDICATED;
-        /* default A/D converter type */
-        if (opt->ad_converter_type == AC3ENC_OPT_NONE)
-            opt->ad_converter_type = AC3ENC_OPT_ADCONV_STANDARD;
-    }
-
-    /* copyright & original defaults */
-    if (!s->eac3 || opt->eac3_info_metadata) {
-        /* default copyright */
-        if (opt->copyright == AC3ENC_OPT_NONE)
-            opt->copyright = AC3ENC_OPT_OFF;
-        /* default original */
-        if (opt->original == AC3ENC_OPT_NONE)
-            opt->original = AC3ENC_OPT_ON;
-    }
-
-    /* dolby surround mode default */
-    if (!s->eac3 || opt->eac3_info_metadata) {
-        if (opt->dolby_surround_mode == AC3ENC_OPT_NONE)
-            opt->dolby_surround_mode = AC3ENC_OPT_NOT_INDICATED;
-    }
-
-    /* validate audio production info */
-    if (opt->audio_production_info) {
-        if (opt->mixing_level == AC3ENC_OPT_NONE) {
-            av_log(avctx, AV_LOG_ERROR, "mixing_level must be set if "
-                   "room_type is set\n");
-            return AVERROR(EINVAL);
-        }
-        if (opt->mixing_level < 80) {
-            av_log(avctx, AV_LOG_ERROR, "invalid mixing level. must be between "
-                   "80dB and 111dB\n");
-            return AVERROR(EINVAL);
-        }
-        /* default room type */
-        if (opt->room_type == AC3ENC_OPT_NONE)
-            opt->room_type = AC3ENC_OPT_NOT_INDICATED;
-    }
-
-    /* set bitstream id for alternate bitstream syntax */
-    if (!s->eac3 && (opt->extended_bsi_1 || opt->extended_bsi_2))
-        s->bitstream_id = 6;
-
-    return 0;
-}
-
 /**
  * Adjust the frame size to make the average bit rate match the target bit rate.
  * This is only needed for 11025, 22050, and 44100 sample rates or any E-AC-3.
  *
  * @param s  AC-3 encoder private context
  */
-static void ac3_adjust_frame_size(AC3EncodeContext *s)
+void ff_ac3_adjust_frame_size(AC3EncodeContext *s)
 {
     while (s->bits_written >= s->bit_rate && s->samples_written >= s->sample_rate) {
         s->bits_written    -= s->bit_rate;
@@ -503,27 +190,6 @@ static void ac3_adjust_frame_size(AC3EncodeContext *s)
     s->samples_written += AC3_BLOCK_SIZE * s->num_blocks;
 }
 
-/*
- * Copy input samples.
- * Channels are reordered from FFmpeg's default order to AC-3 order.
- */
-static void copy_input_samples(AC3EncodeContext *s, uint8_t * const *samples)
-{
-    const unsigned sampletype_size = SAMPLETYPE_SIZE(s);
-
-    /* copy and remap input samples */
-    for (int ch = 0; ch < s->channels; ch++) {
-        /* copy last 256 samples of previous frame to the start of the current frame */
-        memcpy(&s->planar_samples[ch][0],
-               s->planar_samples[ch] + AC3_BLOCK_SIZE * sampletype_size * s->num_blocks,
-               AC3_BLOCK_SIZE * sampletype_size);
-
-        /* copy new samples for current frame */
-        memcpy(s->planar_samples[ch] + AC3_BLOCK_SIZE * sampletype_size,
-               samples[s->channel_map[ch]],
-               sampletype_size * AC3_BLOCK_SIZE * s->num_blocks);
-    }
-}
 
 /**
  * Set the initial coupling strategy parameters prior to coupling analysis.
@@ -601,7 +267,7 @@ void ff_ac3_compute_coupling_strategy(AC3EncodeContext *s)
  *
  * @param s  AC-3 encoder private context
  */
-static void ac3_apply_rematrixing(AC3EncodeContext *s)
+void ff_ac3_apply_rematrixing(AC3EncodeContext *s)
 {
     int nb_coefs;
     int blk, bnd, i;
@@ -635,7 +301,7 @@ static void ac3_apply_rematrixing(AC3EncodeContext *s)
 /*
  * Initialize exponent tables.
  */
-static av_cold void exponent_init(void)
+static av_cold void exponent_init(AC3EncodeContext *s)
 {
     int expstr, i, grpsize;
 
@@ -648,6 +314,9 @@ static av_cold void exponent_init(void)
     }
     /* LFE */
     exponent_group_tab[0][0][7] = 2;
+
+    if (CONFIG_EAC3_ENCODER && s->eac3)
+        ff_eac3_exponent_init();
 }
 
 
@@ -710,7 +379,7 @@ static void compute_exp_strategy(AC3EncodeContext *s)
                 exp_strategy[blk] = EXP_NEW;
                 continue;
             }
-            exp_diff = s->mecc.sad[0](NULL, exp, exp - AC3_MAX_COEFS, 16, 16);
+            exp_diff = s->dsp.sad[0](NULL, exp, exp - AC3_MAX_COEFS, 16, 16);
             exp_strategy[blk] = EXP_REUSE;
             if (ch == CPL_CH && exp_diff > (EXP_DIFF_THRESHOLD * (s->blocks[blk].end_freq[ch] - s->start_freq[ch]) / AC3_MAX_COEFS))
                 exp_strategy[blk] = EXP_NEW;
@@ -905,7 +574,7 @@ static int count_exponent_bits(AC3EncodeContext *s)
  *
  * @param s  AC-3 encoder private context
  */
-static void ac3_group_exponents(AC3EncodeContext *s)
+void ff_ac3_group_exponents(AC3EncodeContext *s)
 {
     int blk, ch, i, cpl;
     int group_size, nb_groups;
@@ -963,7 +632,7 @@ static void ac3_group_exponents(AC3EncodeContext *s)
  *
  * @param s  AC-3 encoder private context
  */
-static void ac3_process_exponents(AC3EncodeContext *s)
+void ff_ac3_process_exponents(AC3EncodeContext *s)
 {
     extract_exponents(s);
 
@@ -981,7 +650,7 @@ static void ac3_process_exponents(AC3EncodeContext *s)
  */
 static void count_frame_bits_fixed(AC3EncodeContext *s)
 {
-    static const uint8_t frame_bits_inc[8] = { 0, 0, 2, 2, 2, 4, 2, 4 };
+    static const int frame_bits_inc[8] = { 0, 0, 2, 2, 2, 4, 2, 4 };
     int blk;
     int frame_bits;
 
@@ -1046,10 +715,6 @@ static void count_frame_bits_fixed(AC3EncodeContext *s)
         if (s->eac3)
             frame_bits++;
 
-        /* coupling strategy exists: cplstre */
-        if (!s->eac3)
-            frame_bits++;
-
         if (!s->eac3) {
             /* exponent strategy */
             frame_bits += 2 * s->fbw_channels;
@@ -1062,8 +727,9 @@ static void count_frame_bits_fixed(AC3EncodeContext *s)
                 frame_bits += 2 + 2 + 2 + 2 + 3;
         }
 
-        /* snroffste for AC-3, convsnroffste for E-AC-3 */
-        frame_bits++;
+        /* converter snr offset */
+        if (s->eac3)
+            frame_bits++;
 
         if (!s->eac3) {
             /* delta bit allocation */
@@ -1088,7 +754,7 @@ static void count_frame_bits_fixed(AC3EncodeContext *s)
  * Initialize bit allocation.
  * Set default parameter codes and calculate parameter values.
  */
-static av_cold void bit_alloc_init(AC3EncodeContext *s)
+static void bit_alloc_init(AC3EncodeContext *s)
 {
     int ch;
 
@@ -1107,8 +773,8 @@ static av_cold void bit_alloc_init(AC3EncodeContext *s)
     /* compute real values */
     /* currently none of these values change during encoding, so we can just
        set them once at initialization */
-    s->bit_alloc.slow_decay = ff_ac3_slow_decay_tab[s->slow_decay_code];
-    s->bit_alloc.fast_decay = ff_ac3_fast_decay_tab[s->fast_decay_code];
+    s->bit_alloc.slow_decay = ff_ac3_slow_decay_tab[s->slow_decay_code] >> s->bit_alloc.sr_shift;
+    s->bit_alloc.fast_decay = ff_ac3_fast_decay_tab[s->fast_decay_code] >> s->bit_alloc.sr_shift;
     s->bit_alloc.slow_gain  = ff_ac3_slow_gain_tab[s->slow_gain_code];
     s->bit_alloc.db_per_bit = ff_ac3_db_per_bit_tab[s->db_per_bit_code];
     s->bit_alloc.floor      = ff_ac3_floor_tab[s->floor_code];
@@ -1169,7 +835,7 @@ static void count_frame_bits(AC3EncodeContext *s)
         /* coupling exponent strategy */
         if (s->cpl_on) {
             if (s->use_frame_exp_strategy) {
-                frame_bits += 5;
+                frame_bits += 5 * s->cpl_on;
             } else {
                 for (blk = 0; blk < s->num_blocks; blk++)
                     frame_bits += 2 * s->blocks[blk].cpl_in_use;
@@ -1191,6 +857,8 @@ static void count_frame_bits(AC3EncodeContext *s)
         AC3Block *block = &s->blocks[blk];
 
         /* coupling strategy */
+        if (!s->eac3)
+            frame_bits++;
         if (block->new_cpl_strategy) {
             if (!s->eac3)
                 frame_bits++;
@@ -1246,6 +914,7 @@ static void count_frame_bits(AC3EncodeContext *s)
 
         /* snr offsets and fast gain codes */
         if (!s->eac3) {
+            frame_bits++;
             if (block->new_snr_offsets)
                 frame_bits += 6 + (s->channels + block->cpl_in_use) * (4 + 3);
         }
@@ -1394,7 +1063,7 @@ static int bit_alloc(AC3EncodeContext *s, int snr_offset)
 {
     int blk, ch;
 
-    snr_offset = (snr_offset - 240) * 4;
+    snr_offset = (snr_offset - 240) << 2;
 
     reset_block_bap(s);
     for (blk = 0; blk < s->num_blocks; blk++) {
@@ -1472,7 +1141,7 @@ static int cbr_bit_allocation(AC3EncodeContext *s)
  * frame size.  Output is the SNR offset and a set of bit allocation pointers
  * used to quantize the mantissas.
  */
-static int ac3_compute_bit_allocation(AC3EncodeContext *s)
+int ff_ac3_compute_bit_allocation(AC3EncodeContext *s)
 {
     count_frame_bits(s);
 
@@ -1512,7 +1181,7 @@ static inline int asym_quant(int c, int e, int qbits)
 {
     int m;
 
-    c = (((c * (1<<e)) >> (24 - qbits)) + 1) >> 1;
+    c = (((c << e) >> (24 - qbits)) + 1) >> 1;
     m = (1 << (qbits-1));
     if (c >= m)
         c = m - 1;
@@ -1543,9 +1212,8 @@ static void quantize_mantissas_blk_ch(AC3Mant *s, int32_t *fixed_coef,
         int c = fixed_coef[i];
         int e = exp[i];
         int v = bap[i];
+        if (v)
         switch (v) {
-        case 0:
-            break;
         case 1:
             v = sym_quant(c, e, 3);
             switch (s->mant1_cnt) {
@@ -1627,7 +1295,7 @@ static void quantize_mantissas_blk_ch(AC3Mant *s, int32_t *fixed_coef,
  *
  * @param s  AC-3 encoder private context
  */
-static void ac3_quantize_mantissas(AC3EncodeContext *s)
+void ff_ac3_quantize_mantissas(AC3EncodeContext *s)
 {
     int blk, ch, ch0=0, got_cpl;
 
@@ -1702,8 +1370,8 @@ static void ac3_output_frame_header(AC3EncodeContext *s)
             put_bits(&s->pb, 9, 0);     /* xbsi2 and encinfo : reserved */
         }
     } else {
-        put_bits(&s->pb, 1, 0);     /* no time code 1 */
-        put_bits(&s->pb, 1, 0);     /* no time code 2 */
+    put_bits(&s->pb, 1, 0);         /* no time code 1 */
+    put_bits(&s->pb, 1, 0);         /* no time code 2 */
     }
     put_bits(&s->pb, 1, 0);         /* no additional bit stream info */
 }
@@ -1714,7 +1382,7 @@ static void ac3_output_frame_header(AC3EncodeContext *s)
  */
 static void output_audio_block(AC3EncodeContext *s, int blk)
 {
-    int ch, i, baie, bnd, got_cpl, av_uninit(ch0);
+    int ch, i, baie, bnd, got_cpl, ch0;
     AC3Block *block = &s->blocks[blk];
 
     /* block switching */
@@ -1942,7 +1610,7 @@ static unsigned int pow_poly(unsigned int a, unsigned int n, unsigned int poly)
 static void output_frame_end(AC3EncodeContext *s)
 {
     const AVCRC *crc_ctx = av_crc_get_table(AV_CRC_16_ANSI);
-    int frame_size_58, pad_bytes, crc1, crc2, crc_inv;
+    int frame_size_58, pad_bytes, crc1, crc2_partial, crc2, crc_inv;
     uint8_t *frame;
 
     frame_size_58 = ((s->frame_size >> 2) + (s->frame_size >> 4)) << 1;
@@ -1958,27 +1626,26 @@ static void output_frame_end(AC3EncodeContext *s)
 
     if (s->eac3) {
         /* compute crc2 */
-        crc2 = av_crc(crc_ctx, 0, frame + 2, s->frame_size - 4);
+        crc2_partial = av_crc(crc_ctx, 0, frame + 2, s->frame_size - 5);
     } else {
-        /* compute crc1 */
-        /* this is not so easy because it is at the beginning of the data... */
-        crc1    = av_bswap16(av_crc(crc_ctx, 0, frame + 4, frame_size_58 - 4));
-        crc_inv = s->crc_inv[s->frame_size > s->frame_size_min];
-        crc1    = mul_poly(crc_inv, crc1, CRC16_POLY);
-        AV_WB16(frame + 2, crc1);
+    /* compute crc1 */
+    /* this is not so easy because it is at the beginning of the data... */
+    crc1    = av_bswap16(av_crc(crc_ctx, 0, frame + 4, frame_size_58 - 4));
+    crc_inv = s->crc_inv[s->frame_size > s->frame_size_min];
+    crc1    = mul_poly(crc_inv, crc1, CRC16_POLY);
+    AV_WB16(frame + 2, crc1);
 
-        /* compute crc2 */
-        crc2 = av_crc(crc_ctx, 0, frame + frame_size_58,
-                      s->frame_size - frame_size_58 - 2);
+    /* compute crc2 */
+    crc2_partial = av_crc(crc_ctx, 0, frame + frame_size_58,
+                          s->frame_size - frame_size_58 - 3);
+    }
+    crc2 = av_crc(crc_ctx, crc2_partial, frame + s->frame_size - 3, 1);
+    /* ensure crc2 does not match sync word by flipping crcrsv bit if needed */
+    if (crc2 == 0x770B) {
+        frame[s->frame_size - 3] ^= 0x1;
+        crc2 = av_crc(crc_ctx, crc2_partial, frame + s->frame_size - 3, 1);
     }
     crc2 = av_bswap16(crc2);
-    /* ensure crc2 does not match sync word by flipping crcrsv bit if needed */
-    if (crc2 == 0x0B77) {
-        /* The CRC generator polynomial is x^16 + x^15 + x^2 + 1,
-         * so xor'ing with 0x18005 does not affect the CRC. */
-        frame[s->frame_size - 3] ^= 0x1;
-        crc2                     ^= 0x8005;
-    }
     AV_WB16(frame + s->frame_size - 2, crc2);
 }
 
@@ -1989,11 +1656,11 @@ static void output_frame_end(AC3EncodeContext *s)
  * @param s      AC-3 encoder private context
  * @param frame  output data buffer
  */
-static void ac3_output_frame(AC3EncodeContext *s, unsigned char *frame)
+void ff_ac3_output_frame(AC3EncodeContext *s, unsigned char *frame)
 {
     int blk;
 
-    init_put_bits(&s->pb, frame, s->frame_size);
+    init_put_bits(&s->pb, frame, AC3_MAX_CODED_FRAME_SIZE);
 
     s->output_frame_header(s);
 
@@ -2003,175 +1670,342 @@ static void ac3_output_frame(AC3EncodeContext *s, unsigned char *frame)
     output_frame_end(s);
 }
 
-int ff_ac3_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
-                        const AVFrame *frame, int *got_packet_ptr)
-{
-    AC3EncodeContext *const s = avctx->priv_data;
-    int ret;
-
-    if (s->options.allow_per_frame_metadata) {
-        ret = ac3_validate_metadata(s);
-        if (ret)
-            return ret;
-    }
-
-    if (s->bit_alloc.sr_code == 1 || s->eac3)
-        ac3_adjust_frame_size(s);
-
-    copy_input_samples(s, frame->extended_data);
-
-    s->encode_frame(s);
-
-    ac3_apply_rematrixing(s);
-
-    ac3_process_exponents(s);
-
-    ret = ac3_compute_bit_allocation(s);
-    if (ret) {
-        av_log(avctx, AV_LOG_ERROR, "Bit allocation failed. Try increasing the bitrate.\n");
-        return ret;
-    }
-
-    ac3_group_exponents(s);
-
-    ac3_quantize_mantissas(s);
-
-    ret = ff_get_encode_buffer(avctx, avpkt, s->frame_size, 0);
-    if (ret < 0)
-        return ret;
-    ac3_output_frame(s, avpkt->data);
-
-    if (frame->pts != AV_NOPTS_VALUE)
-        avpkt->pts = frame->pts - ff_samples_to_time_base(avctx, avctx->initial_padding);
-
-    *got_packet_ptr = 1;
-    return 0;
-}
 
 static void dprint_options(AC3EncodeContext *s)
 {
 #ifdef DEBUG
     AVCodecContext *avctx = s->avctx;
     AC3EncOptions *opt = &s->options;
-    const char *msg;
     char strbuf[32];
 
     switch (s->bitstream_id) {
-    case  6: msg = "AC-3 (alt syntax)";       break;
-    case  8: msg = "AC-3 (standard)";         break;
-    case 16: msg = "E-AC-3 (enhanced)";       break;
-    default: msg = "ERROR";
+    case  6:  av_strlcpy(strbuf, "AC-3 (alt syntax)",       32); break;
+    case  8:  av_strlcpy(strbuf, "AC-3 (standard)",         32); break;
+    case  9:  av_strlcpy(strbuf, "AC-3 (dnet half-rate)",   32); break;
+    case 10:  av_strlcpy(strbuf, "AC-3 (dnet quater-rate)", 32); break;
+    case 16:  av_strlcpy(strbuf, "E-AC-3 (enhanced)",       32); break;
+    default: snprintf(strbuf, 32, "ERROR");
     }
-    ff_dlog(avctx, "bitstream_id: %s (%d)\n", msg, s->bitstream_id);
-    ff_dlog(avctx, "sample_fmt: %s\n", av_get_sample_fmt_name(avctx->sample_fmt));
-    av_channel_layout_describe(&avctx->ch_layout, strbuf, sizeof(strbuf));
-    ff_dlog(avctx, "channel_layout: %s\n", strbuf);
-    ff_dlog(avctx, "sample_rate: %d\n", s->sample_rate);
-    ff_dlog(avctx, "bit_rate: %d\n", s->bit_rate);
-    ff_dlog(avctx, "blocks/frame: %d (code=%d)\n", s->num_blocks, s->num_blks_code);
+    av_dlog(avctx, "bitstream_id: %s (%d)\n", strbuf, s->bitstream_id);
+    av_dlog(avctx, "sample_fmt: %s\n", av_get_sample_fmt_name(avctx->sample_fmt));
+    av_get_channel_layout_string(strbuf, 32, s->channels, avctx->channel_layout);
+    av_dlog(avctx, "channel_layout: %s\n", strbuf);
+    av_dlog(avctx, "sample_rate: %d\n", s->sample_rate);
+    av_dlog(avctx, "bit_rate: %d\n", s->bit_rate);
+    av_dlog(avctx, "blocks/frame: %d (code=%d)\n", s->num_blocks, s->num_blks_code);
     if (s->cutoff)
-        ff_dlog(avctx, "cutoff: %d\n", s->cutoff);
+        av_dlog(avctx, "cutoff: %d\n", s->cutoff);
 
-    ff_dlog(avctx, "per_frame_metadata: %s\n",
+    av_dlog(avctx, "per_frame_metadata: %s\n",
             opt->allow_per_frame_metadata?"on":"off");
     if (s->has_center)
-        ff_dlog(avctx, "center_mixlev: %0.3f (%d)\n", opt->center_mix_level,
+        av_dlog(avctx, "center_mixlev: %0.3f (%d)\n", opt->center_mix_level,
                 s->center_mix_level);
     else
-        ff_dlog(avctx, "center_mixlev: {not written}\n");
+        av_dlog(avctx, "center_mixlev: {not written}\n");
     if (s->has_surround)
-        ff_dlog(avctx, "surround_mixlev: %0.3f (%d)\n", opt->surround_mix_level,
+        av_dlog(avctx, "surround_mixlev: %0.3f (%d)\n", opt->surround_mix_level,
                 s->surround_mix_level);
     else
-        ff_dlog(avctx, "surround_mixlev: {not written}\n");
+        av_dlog(avctx, "surround_mixlev: {not written}\n");
     if (opt->audio_production_info) {
-        ff_dlog(avctx, "mixing_level: %ddB\n", opt->mixing_level);
+        av_dlog(avctx, "mixing_level: %ddB\n", opt->mixing_level);
         switch (opt->room_type) {
-        case AC3ENC_OPT_NOT_INDICATED: msg = "notindicated"; break;
-        case AC3ENC_OPT_LARGE_ROOM:    msg = "large";        break;
-        case AC3ENC_OPT_SMALL_ROOM:    msg = "small";        break;
-        default:
-            snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->room_type);
-            msg = strbuf;
+        case AC3ENC_OPT_NOT_INDICATED: av_strlcpy(strbuf, "notindicated", 32); break;
+        case AC3ENC_OPT_LARGE_ROOM:    av_strlcpy(strbuf, "large", 32);        break;
+        case AC3ENC_OPT_SMALL_ROOM:    av_strlcpy(strbuf, "small", 32);        break;
+        default: snprintf(strbuf, 32, "ERROR (%d)", opt->room_type);
         }
-        ff_dlog(avctx, "room_type: %s\n", msg);
+        av_dlog(avctx, "room_type: %s\n", strbuf);
     } else {
-        ff_dlog(avctx, "mixing_level: {not written}\n");
-        ff_dlog(avctx, "room_type: {not written}\n");
+        av_dlog(avctx, "mixing_level: {not written}\n");
+        av_dlog(avctx, "room_type: {not written}\n");
     }
-    ff_dlog(avctx, "copyright: %s\n", opt->copyright?"on":"off");
-    ff_dlog(avctx, "dialnorm: %ddB\n", opt->dialogue_level);
+    av_dlog(avctx, "copyright: %s\n", opt->copyright?"on":"off");
+    av_dlog(avctx, "dialnorm: %ddB\n", opt->dialogue_level);
     if (s->channel_mode == AC3_CHMODE_STEREO) {
         switch (opt->dolby_surround_mode) {
-        case AC3ENC_OPT_NOT_INDICATED: msg = "notindicated"; break;
-        case AC3ENC_OPT_MODE_ON:       msg = "on";           break;
-        case AC3ENC_OPT_MODE_OFF:      msg = "off";          break;
-        default:
-            snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->dolby_surround_mode);
-            msg = strbuf;
+        case AC3ENC_OPT_NOT_INDICATED: av_strlcpy(strbuf, "notindicated", 32); break;
+        case AC3ENC_OPT_MODE_ON:       av_strlcpy(strbuf, "on", 32);           break;
+        case AC3ENC_OPT_MODE_OFF:      av_strlcpy(strbuf, "off", 32);          break;
+        default: snprintf(strbuf, 32, "ERROR (%d)", opt->dolby_surround_mode);
         }
-        ff_dlog(avctx, "dsur_mode: %s\n", msg);
+        av_dlog(avctx, "dsur_mode: %s\n", strbuf);
     } else {
-        ff_dlog(avctx, "dsur_mode: {not written}\n");
+        av_dlog(avctx, "dsur_mode: {not written}\n");
     }
-    ff_dlog(avctx, "original: %s\n", opt->original?"on":"off");
+    av_dlog(avctx, "original: %s\n", opt->original?"on":"off");
 
     if (s->bitstream_id == 6) {
         if (opt->extended_bsi_1) {
             switch (opt->preferred_stereo_downmix) {
-            case AC3ENC_OPT_NOT_INDICATED: msg = "notindicated"; break;
-            case AC3ENC_OPT_DOWNMIX_LTRT:  msg = "ltrt";         break;
-            case AC3ENC_OPT_DOWNMIX_LORO:  msg = "loro";         break;
-            default:
-                snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->preferred_stereo_downmix);
-                msg = strbuf;
+            case AC3ENC_OPT_NOT_INDICATED: av_strlcpy(strbuf, "notindicated", 32); break;
+            case AC3ENC_OPT_DOWNMIX_LTRT:  av_strlcpy(strbuf, "ltrt", 32);         break;
+            case AC3ENC_OPT_DOWNMIX_LORO:  av_strlcpy(strbuf, "loro", 32);         break;
+            default: snprintf(strbuf, 32, "ERROR (%d)", opt->preferred_stereo_downmix);
             }
-            ff_dlog(avctx, "dmix_mode: %s\n", msg);
-            ff_dlog(avctx, "ltrt_cmixlev: %0.3f (%d)\n",
+            av_dlog(avctx, "dmix_mode: %s\n", strbuf);
+            av_dlog(avctx, "ltrt_cmixlev: %0.3f (%d)\n",
                     opt->ltrt_center_mix_level, s->ltrt_center_mix_level);
-            ff_dlog(avctx, "ltrt_surmixlev: %0.3f (%d)\n",
+            av_dlog(avctx, "ltrt_surmixlev: %0.3f (%d)\n",
                     opt->ltrt_surround_mix_level, s->ltrt_surround_mix_level);
-            ff_dlog(avctx, "loro_cmixlev: %0.3f (%d)\n",
+            av_dlog(avctx, "loro_cmixlev: %0.3f (%d)\n",
                     opt->loro_center_mix_level, s->loro_center_mix_level);
-            ff_dlog(avctx, "loro_surmixlev: %0.3f (%d)\n",
+            av_dlog(avctx, "loro_surmixlev: %0.3f (%d)\n",
                     opt->loro_surround_mix_level, s->loro_surround_mix_level);
         } else {
-            ff_dlog(avctx, "extended bitstream info 1: {not written}\n");
+            av_dlog(avctx, "extended bitstream info 1: {not written}\n");
         }
         if (opt->extended_bsi_2) {
             switch (opt->dolby_surround_ex_mode) {
-            case AC3ENC_OPT_NOT_INDICATED: msg = "notindicated"; break;
-            case AC3ENC_OPT_MODE_ON:       msg = "on";           break;
-            case AC3ENC_OPT_MODE_OFF:      msg = "off";          break;
-            default:
-                snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->dolby_surround_ex_mode);
-                msg = strbuf;
+            case AC3ENC_OPT_NOT_INDICATED: av_strlcpy(strbuf, "notindicated", 32); break;
+            case AC3ENC_OPT_MODE_ON:       av_strlcpy(strbuf, "on", 32);           break;
+            case AC3ENC_OPT_MODE_OFF:      av_strlcpy(strbuf, "off", 32);          break;
+            default: snprintf(strbuf, 32, "ERROR (%d)", opt->dolby_surround_ex_mode);
             }
-            ff_dlog(avctx, "dsurex_mode: %s\n", msg);
+            av_dlog(avctx, "dsurex_mode: %s\n", strbuf);
             switch (opt->dolby_headphone_mode) {
-            case AC3ENC_OPT_NOT_INDICATED: msg = "notindicated"; break;
-            case AC3ENC_OPT_MODE_ON:       msg = "on";           break;
-            case AC3ENC_OPT_MODE_OFF:      msg = "off";          break;
-            default:
-                snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->dolby_headphone_mode);
-                msg = strbuf;
+            case AC3ENC_OPT_NOT_INDICATED: av_strlcpy(strbuf, "notindicated", 32); break;
+            case AC3ENC_OPT_MODE_ON:       av_strlcpy(strbuf, "on", 32);           break;
+            case AC3ENC_OPT_MODE_OFF:      av_strlcpy(strbuf, "off", 32);          break;
+            default: snprintf(strbuf, 32, "ERROR (%d)", opt->dolby_headphone_mode);
             }
-            ff_dlog(avctx, "dheadphone_mode: %s\n", msg);
+            av_dlog(avctx, "dheadphone_mode: %s\n", strbuf);
 
             switch (opt->ad_converter_type) {
-            case AC3ENC_OPT_ADCONV_STANDARD: msg = "standard"; break;
-            case AC3ENC_OPT_ADCONV_HDCD:     msg = "hdcd";     break;
-            default:
-                snprintf(strbuf, sizeof(strbuf), "ERROR (%d)", opt->ad_converter_type);
-                msg = strbuf;
+            case AC3ENC_OPT_ADCONV_STANDARD: av_strlcpy(strbuf, "standard", 32); break;
+            case AC3ENC_OPT_ADCONV_HDCD:     av_strlcpy(strbuf, "hdcd", 32);     break;
+            default: snprintf(strbuf, 32, "ERROR (%d)", opt->ad_converter_type);
             }
-            ff_dlog(avctx, "ad_conv_type: %s\n", msg);
+            av_dlog(avctx, "ad_conv_type: %s\n", strbuf);
         } else {
-            ff_dlog(avctx, "extended bitstream info 2: {not written}\n");
+            av_dlog(avctx, "extended bitstream info 2: {not written}\n");
         }
     }
 #endif
 }
+
+
+#define FLT_OPTION_THRESHOLD 0.01
+
+static int validate_float_option(float v, const float *v_list, int v_list_size)
+{
+    int i;
+
+    for (i = 0; i < v_list_size; i++) {
+        if (v < (v_list[i] + FLT_OPTION_THRESHOLD) &&
+            v > (v_list[i] - FLT_OPTION_THRESHOLD))
+            break;
+    }
+    if (i == v_list_size)
+        return -1;
+
+    return i;
+}
+
+
+static void validate_mix_level(void *log_ctx, const char *opt_name,
+                               float *opt_param, const float *list,
+                               int list_size, int default_value, int min_value,
+                               int *ctx_param)
+{
+    int mixlev = validate_float_option(*opt_param, list, list_size);
+    if (mixlev < min_value) {
+        mixlev = default_value;
+        if (*opt_param >= 0.0) {
+            av_log(log_ctx, AV_LOG_WARNING, "requested %s is not valid. using "
+                   "default value: %0.3f\n", opt_name, list[mixlev]);
+        }
+    }
+    *opt_param = list[mixlev];
+    *ctx_param = mixlev;
+}
+
+
+/**
+ * Validate metadata options as set by AVOption system.
+ * These values can optionally be changed per-frame.
+ *
+ * @param s  AC-3 encoder private context
+ */
+int ff_ac3_validate_metadata(AC3EncodeContext *s)
+{
+    AVCodecContext *avctx = s->avctx;
+    AC3EncOptions *opt = &s->options;
+
+    opt->audio_production_info = 0;
+    opt->extended_bsi_1        = 0;
+    opt->extended_bsi_2        = 0;
+    opt->eac3_mixing_metadata  = 0;
+    opt->eac3_info_metadata    = 0;
+
+    /* determine mixing metadata / xbsi1 use */
+    if (s->channel_mode > AC3_CHMODE_STEREO && opt->preferred_stereo_downmix != AC3ENC_OPT_NONE) {
+        opt->extended_bsi_1       = 1;
+        opt->eac3_mixing_metadata = 1;
+    }
+    if (s->has_center &&
+        (opt->ltrt_center_mix_level >= 0 || opt->loro_center_mix_level >= 0)) {
+        opt->extended_bsi_1       = 1;
+        opt->eac3_mixing_metadata = 1;
+    }
+    if (s->has_surround &&
+        (opt->ltrt_surround_mix_level >= 0 || opt->loro_surround_mix_level >= 0)) {
+        opt->extended_bsi_1       = 1;
+        opt->eac3_mixing_metadata = 1;
+    }
+
+    if (s->eac3) {
+        /* determine info metadata use */
+        if (avctx->audio_service_type != AV_AUDIO_SERVICE_TYPE_MAIN)
+            opt->eac3_info_metadata = 1;
+        if (opt->copyright != AC3ENC_OPT_NONE || opt->original != AC3ENC_OPT_NONE)
+            opt->eac3_info_metadata = 1;
+        if (s->channel_mode == AC3_CHMODE_STEREO &&
+            (opt->dolby_headphone_mode != AC3ENC_OPT_NONE || opt->dolby_surround_mode != AC3ENC_OPT_NONE))
+            opt->eac3_info_metadata = 1;
+        if (s->channel_mode >= AC3_CHMODE_2F2R && opt->dolby_surround_ex_mode != AC3ENC_OPT_NONE)
+            opt->eac3_info_metadata = 1;
+        if (opt->mixing_level != AC3ENC_OPT_NONE || opt->room_type != AC3ENC_OPT_NONE ||
+            opt->ad_converter_type != AC3ENC_OPT_NONE) {
+            opt->audio_production_info = 1;
+            opt->eac3_info_metadata    = 1;
+        }
+    } else {
+        /* determine audio production info use */
+        if (opt->mixing_level != AC3ENC_OPT_NONE || opt->room_type != AC3ENC_OPT_NONE)
+            opt->audio_production_info = 1;
+
+        /* determine xbsi2 use */
+        if (s->channel_mode >= AC3_CHMODE_2F2R && opt->dolby_surround_ex_mode != AC3ENC_OPT_NONE)
+            opt->extended_bsi_2 = 1;
+        if (s->channel_mode == AC3_CHMODE_STEREO && opt->dolby_headphone_mode != AC3ENC_OPT_NONE)
+            opt->extended_bsi_2 = 1;
+        if (opt->ad_converter_type != AC3ENC_OPT_NONE)
+            opt->extended_bsi_2 = 1;
+    }
+
+    /* validate AC-3 mixing levels */
+    if (!s->eac3) {
+        if (s->has_center) {
+            validate_mix_level(avctx, "center_mix_level", &opt->center_mix_level,
+                            cmixlev_options, CMIXLEV_NUM_OPTIONS, 1, 0,
+                            &s->center_mix_level);
+        }
+        if (s->has_surround) {
+            validate_mix_level(avctx, "surround_mix_level", &opt->surround_mix_level,
+                            surmixlev_options, SURMIXLEV_NUM_OPTIONS, 1, 0,
+                            &s->surround_mix_level);
+        }
+    }
+
+    /* validate extended bsi 1 / mixing metadata */
+    if (opt->extended_bsi_1 || opt->eac3_mixing_metadata) {
+        /* default preferred stereo downmix */
+        if (opt->preferred_stereo_downmix == AC3ENC_OPT_NONE)
+            opt->preferred_stereo_downmix = AC3ENC_OPT_NOT_INDICATED;
+        if (!s->eac3 || s->has_center) {
+            /* validate Lt/Rt center mix level */
+            validate_mix_level(avctx, "ltrt_center_mix_level",
+                               &opt->ltrt_center_mix_level, extmixlev_options,
+                               EXTMIXLEV_NUM_OPTIONS, 5, 0,
+                               &s->ltrt_center_mix_level);
+            /* validate Lo/Ro center mix level */
+            validate_mix_level(avctx, "loro_center_mix_level",
+                               &opt->loro_center_mix_level, extmixlev_options,
+                               EXTMIXLEV_NUM_OPTIONS, 5, 0,
+                               &s->loro_center_mix_level);
+        }
+        if (!s->eac3 || s->has_surround) {
+            /* validate Lt/Rt surround mix level */
+            validate_mix_level(avctx, "ltrt_surround_mix_level",
+                               &opt->ltrt_surround_mix_level, extmixlev_options,
+                               EXTMIXLEV_NUM_OPTIONS, 6, 3,
+                               &s->ltrt_surround_mix_level);
+            /* validate Lo/Ro surround mix level */
+            validate_mix_level(avctx, "loro_surround_mix_level",
+                               &opt->loro_surround_mix_level, extmixlev_options,
+                               EXTMIXLEV_NUM_OPTIONS, 6, 3,
+                               &s->loro_surround_mix_level);
+        }
+    }
+
+    /* validate audio service type / channels combination */
+    if ((avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_KARAOKE &&
+         avctx->channels == 1) ||
+        ((avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_COMMENTARY ||
+          avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_EMERGENCY  ||
+          avctx->audio_service_type == AV_AUDIO_SERVICE_TYPE_VOICE_OVER)
+         && avctx->channels > 1)) {
+        av_log(avctx, AV_LOG_ERROR, "invalid audio service type for the "
+                                    "specified number of channels\n");
+        return AVERROR(EINVAL);
+    }
+
+    /* validate extended bsi 2 / info metadata */
+    if (opt->extended_bsi_2 || opt->eac3_info_metadata) {
+        /* default dolby headphone mode */
+        if (opt->dolby_headphone_mode == AC3ENC_OPT_NONE)
+            opt->dolby_headphone_mode = AC3ENC_OPT_NOT_INDICATED;
+        /* default dolby surround ex mode */
+        if (opt->dolby_surround_ex_mode == AC3ENC_OPT_NONE)
+            opt->dolby_surround_ex_mode = AC3ENC_OPT_NOT_INDICATED;
+        /* default A/D converter type */
+        if (opt->ad_converter_type == AC3ENC_OPT_NONE)
+            opt->ad_converter_type = AC3ENC_OPT_ADCONV_STANDARD;
+    }
+
+    /* copyright & original defaults */
+    if (!s->eac3 || opt->eac3_info_metadata) {
+        /* default copyright */
+        if (opt->copyright == AC3ENC_OPT_NONE)
+            opt->copyright = AC3ENC_OPT_OFF;
+        /* default original */
+        if (opt->original == AC3ENC_OPT_NONE)
+            opt->original = AC3ENC_OPT_ON;
+    }
+
+    /* dolby surround mode default */
+    if (!s->eac3 || opt->eac3_info_metadata) {
+        if (opt->dolby_surround_mode == AC3ENC_OPT_NONE)
+            opt->dolby_surround_mode = AC3ENC_OPT_NOT_INDICATED;
+    }
+
+    /* validate audio production info */
+    if (opt->audio_production_info) {
+        if (opt->mixing_level == AC3ENC_OPT_NONE) {
+            av_log(avctx, AV_LOG_ERROR, "mixing_level must be set if "
+                   "room_type is set\n");
+            return AVERROR(EINVAL);
+        }
+        if (opt->mixing_level < 80) {
+            av_log(avctx, AV_LOG_ERROR, "invalid mixing level. must be between "
+                   "80dB and 111dB\n");
+            return AVERROR(EINVAL);
+        }
+        /* default room type */
+        if (opt->room_type == AC3ENC_OPT_NONE)
+            opt->room_type = AC3ENC_OPT_NOT_INDICATED;
+    }
+
+    /* set bitstream id for alternate bitstream syntax */
+    if (!s->eac3 && (opt->extended_bsi_1 || opt->extended_bsi_2)) {
+        if (s->bitstream_id > 8 && s->bitstream_id < 11) {
+            static int warn_once = 1;
+            if (warn_once) {
+                av_log(avctx, AV_LOG_WARNING, "alternate bitstream syntax is "
+                       "not compatible with reduced samplerates. writing of "
+                       "extended bitstream information will be disabled.\n");
+                warn_once = 0;
+            }
+        } else {
+            s->bitstream_id = 6;
+        }
+    }
+
+    return 0;
+}
+
 
 /**
  * Finalize encoding and free any memory allocated by the encoder.
@@ -2183,11 +2017,9 @@ av_cold int ff_ac3_encode_close(AVCodecContext *avctx)
     int blk, ch;
     AC3EncodeContext *s = avctx->priv_data;
 
-    av_freep(&s->mdct_window);
     av_freep(&s->windowed_samples);
-    if (s->planar_samples)
-        for (ch = 0; ch < s->channels; ch++)
-            av_freep(&s->planar_samples[ch]);
+    for (ch = 0; ch < s->channels; ch++)
+        av_freep(&s->planar_samples[ch]);
     av_freep(&s->planar_samples);
     av_freep(&s->bap_buffer);
     av_freep(&s->bap1_buffer);
@@ -2201,7 +2033,6 @@ av_cold int ff_ac3_encode_close(AVCodecContext *avctx)
     av_freep(&s->qmant_buffer);
     av_freep(&s->cpl_coord_exp_buffer);
     av_freep(&s->cpl_coord_mant_buffer);
-    av_freep(&s->fdsp);
     for (blk = 0; blk < s->num_blocks; blk++) {
         AC3Block *block = &s->blocks[blk];
         av_freep(&block->mdct_coef);
@@ -2216,8 +2047,11 @@ av_cold int ff_ac3_encode_close(AVCodecContext *avctx)
         av_freep(&block->cpl_coord_mant);
     }
 
-    av_tx_uninit(&s->tx);
+    s->mdct_end(s);
 
+#if FF_API_OLD_ENCODE_AUDIO
+    av_freep(&avctx->coded_frame);
+#endif
     return 0;
 }
 
@@ -2225,18 +2059,27 @@ av_cold int ff_ac3_encode_close(AVCodecContext *avctx)
 /*
  * Set channel information during initialization.
  */
-static av_cold void set_channel_info(AVCodecContext *avctx)
+static av_cold int set_channel_info(AC3EncodeContext *s, int channels,
+                                    uint64_t *channel_layout)
 {
-    AC3EncodeContext *s = avctx->priv_data;
-    uint64_t mask = av_channel_layout_subset(&avctx->ch_layout, ~(uint64_t)0);
-    int channels = avctx->ch_layout.nb_channels;
+    int ch_layout;
 
-    s->lfe_on       = !!(mask & AV_CH_LOW_FREQUENCY);
+    if (channels < 1 || channels > AC3_MAX_CHANNELS)
+        return AVERROR(EINVAL);
+    if (*channel_layout > 0x7FF)
+        return AVERROR(EINVAL);
+    ch_layout = *channel_layout;
+    if (!ch_layout)
+        ch_layout = av_get_default_channel_layout(channels);
+
+    s->lfe_on       = !!(ch_layout & AV_CH_LOW_FREQUENCY);
     s->channels     = channels;
     s->fbw_channels = channels - s->lfe_on;
     s->lfe_channel  = s->lfe_on ? s->fbw_channels + 1 : -1;
+    if (s->lfe_on)
+        ch_layout -= AV_CH_LOW_FREQUENCY;
 
-    switch (mask & ~AV_CH_LOW_FREQUENCY) {
+    switch (ch_layout) {
     case AV_CH_LAYOUT_MONO:           s->channel_mode = AC3_CHMODE_MONO;   break;
     case AV_CH_LAYOUT_STEREO:         s->channel_mode = AC3_CHMODE_STEREO; break;
     case AV_CH_LAYOUT_SURROUND:       s->channel_mode = AC3_CHMODE_3F;     break;
@@ -2246,30 +2089,55 @@ static av_cold void set_channel_info(AVCodecContext *avctx)
     case AV_CH_LAYOUT_2_2:            s->channel_mode = AC3_CHMODE_2F2R;   break;
     case AV_CH_LAYOUT_5POINT0:
     case AV_CH_LAYOUT_5POINT0_BACK:   s->channel_mode = AC3_CHMODE_3F2R;   break;
+    default:
+        return AVERROR(EINVAL);
     }
     s->has_center   = (s->channel_mode & 0x01) && s->channel_mode != AC3_CHMODE_MONO;
     s->has_surround =  s->channel_mode & 0x04;
 
-    s->channel_map  = ac3_enc_channel_map[s->channel_mode][s->lfe_on];
+    s->channel_map  = ff_ac3_enc_channel_map[s->channel_mode][s->lfe_on];
+    *channel_layout = ch_layout;
+    if (s->lfe_on)
+        *channel_layout |= AV_CH_LOW_FREQUENCY;
+
+    return 0;
 }
 
 
 static av_cold int validate_options(AC3EncodeContext *s)
 {
     AVCodecContext *avctx = s->avctx;
-    int ret;
+    int i, ret, max_sr;
 
-    set_channel_info(avctx);
+    /* validate channel layout */
+    if (!avctx->channel_layout) {
+        av_log(avctx, AV_LOG_WARNING, "No channel layout specified. The "
+                                      "encoder will guess the layout, but it "
+                                      "might be incorrect.\n");
+    }
+    ret = set_channel_info(s, avctx->channels, &avctx->channel_layout);
+    if (ret) {
+        av_log(avctx, AV_LOG_ERROR, "invalid channel layout\n");
+        return ret;
+    }
 
-    for (int i = 0;; i++) {
-        if (ff_ac3_sample_rate_tab[i] == avctx->sample_rate) {
-            s->bit_alloc.sr_code = i;
+    /* validate sample rate */
+    /* note: max_sr could be changed from 2 to 5 for E-AC-3 once we find a
+             decoder that supports half sample rate so we can validate that
+             the generated files are correct. */
+    max_sr = s->eac3 ? 2 : 8;
+    for (i = 0; i <= max_sr; i++) {
+        if ((ff_ac3_sample_rate_tab[i % 3] >> (i / 3)) == avctx->sample_rate)
             break;
-        }
-        av_assert1(ff_ac3_sample_rate_tab[i] != 0);
+    }
+    if (i > max_sr) {
+        av_log(avctx, AV_LOG_ERROR, "invalid sample rate\n");
+        return AVERROR(EINVAL);
     }
     s->sample_rate        = avctx->sample_rate;
-    s->bitstream_id       = s->eac3 ? 16 : 8;
+    s->bit_alloc.sr_shift = i / 3;
+    s->bit_alloc.sr_code  = i % 3;
+    s->bitstream_id       = s->eac3 ? 16 : 8 + s->bit_alloc.sr_shift;
 
     /* select a default bit rate if not set by the user */
     if (!avctx->bit_rate) {
@@ -2284,9 +2152,8 @@ static av_cold int validate_options(AC3EncodeContext *s)
 
     /* validate bit rate */
     if (s->eac3) {
-        int max_br, min_br, wpf, min_br_code;
+        int max_br, min_br, wpf, min_br_dist, min_br_code;
         int num_blks_code, num_blocks, frame_samples;
-        long long min_br_dist;
 
         /* calculate min/max bitrate */
         /* TODO: More testing with 3 and 2 blocks. All E-AC-3 samples I've
@@ -2316,9 +2183,9 @@ static av_cold int validate_options(AC3EncodeContext *s)
            this is needed for lookup tables for bandwidth and coupling
            parameter selection */
         min_br_code = -1;
-        min_br_dist = INT64_MAX;
-        for (int i = 0; i < 19; i++) {
-            long long br_dist = llabs(ff_ac3_bitrate_tab[i] * 1000 - avctx->bit_rate);
+        min_br_dist = INT_MAX;
+        for (i = 0; i < 19; i++) {
+            int br_dist = abs(ff_ac3_bitrate_tab[i] * 1000 - avctx->bit_rate);
             if (br_dist < min_br_dist) {
                 min_br_dist = br_dist;
                 min_br_code = i;
@@ -2331,11 +2198,10 @@ static av_cold int validate_options(AC3EncodeContext *s)
             wpf--;
         s->frame_size_min = 2 * wpf;
     } else {
-        int best_br = 0, best_code = 0;
-        long long best_diff = INT64_MAX;
-        for (int i = 0; i < 19; i++) {
-            int br   = ff_ac3_bitrate_tab[i] * 1000;
-            long long diff = llabs(br - avctx->bit_rate);
+        int best_br = 0, best_code = 0, best_diff = INT_MAX;
+        for (i = 0; i < 19; i++) {
+            int br   = (ff_ac3_bitrate_tab[i] >> s->bit_alloc.sr_shift) * 1000;
+            int diff = abs(br - avctx->bit_rate);
             if (diff < best_diff) {
                 best_br   = br;
                 best_code = i;
@@ -2362,7 +2228,7 @@ static av_cold int validate_options(AC3EncodeContext *s)
     if (s->cutoff > (s->sample_rate >> 1))
         s->cutoff = s->sample_rate >> 1;
 
-    ret = ac3_validate_metadata(s);
+    ret = ff_ac3_validate_metadata(s);
     if (ret)
         return ret;
 
@@ -2383,7 +2249,7 @@ static av_cold int validate_options(AC3EncodeContext *s)
  */
 static av_cold void set_bandwidth(AC3EncodeContext *s)
 {
-    int blk, ch, av_uninit(cpl_start);
+    int blk, ch, cpl_start;
 
     if (s->cutoff) {
         /* calculate bandwidth based on user-specified cutoff frequency */
@@ -2453,57 +2319,60 @@ static av_cold void set_bandwidth(AC3EncodeContext *s)
 
 static av_cold int allocate_buffers(AC3EncodeContext *s)
 {
+    AVCodecContext *avctx = s->avctx;
     int blk, ch;
     int channels = s->channels + 1; /* includes coupling channel */
     int channel_blocks = channels * s->num_blocks;
     int total_coefs    = AC3_MAX_COEFS * channel_blocks;
-    const unsigned sampletype_size = SAMPLETYPE_SIZE(s);
 
-    if (!(s->windowed_samples = av_malloc(sampletype_size * AC3_WINDOW_SIZE)))
-        return AVERROR(ENOMEM);
+    if (s->allocate_sample_buffers(s))
+        goto alloc_fail;
 
-    if (!FF_ALLOCZ_TYPED_ARRAY(s->planar_samples,  s->channels))
-        return AVERROR(ENOMEM);
-
-    for (int ch = 0; ch < s->channels; ch++) {
-        s->planar_samples[ch] = av_mallocz((AC3_FRAME_SIZE + AC3_BLOCK_SIZE) *
-                                                  sampletype_size);
-        if (!s->planar_samples[ch])
-            return AVERROR(ENOMEM);
-    }
-
-    if (!FF_ALLOC_TYPED_ARRAY(s->bap_buffer,         total_coefs)          ||
-        !FF_ALLOC_TYPED_ARRAY(s->bap1_buffer,        total_coefs)          ||
-        !FF_ALLOCZ_TYPED_ARRAY(s->mdct_coef_buffer,  total_coefs)          ||
-        !FF_ALLOC_TYPED_ARRAY(s->exp_buffer,         total_coefs)          ||
-        !FF_ALLOC_TYPED_ARRAY(s->grouped_exp_buffer, channel_blocks * 128) ||
-        !FF_ALLOC_TYPED_ARRAY(s->psd_buffer,         total_coefs)          ||
-        !FF_ALLOC_TYPED_ARRAY(s->band_psd_buffer,    channel_blocks * 64)  ||
-        !FF_ALLOC_TYPED_ARRAY(s->mask_buffer,        channel_blocks * 64)  ||
-        !FF_ALLOC_TYPED_ARRAY(s->qmant_buffer,       total_coefs))
-        return AVERROR(ENOMEM);
-
+    FF_ALLOC_OR_GOTO(avctx, s->bap_buffer, total_coefs *
+                     sizeof(*s->bap_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->bap1_buffer, total_coefs *
+                     sizeof(*s->bap1_buffer), alloc_fail);
+    FF_ALLOCZ_OR_GOTO(avctx, s->mdct_coef_buffer, total_coefs *
+                      sizeof(*s->mdct_coef_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->exp_buffer, total_coefs *
+                     sizeof(*s->exp_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->grouped_exp_buffer, channel_blocks * 128 *
+                     sizeof(*s->grouped_exp_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->psd_buffer, total_coefs *
+                     sizeof(*s->psd_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->band_psd_buffer, channel_blocks * 64 *
+                     sizeof(*s->band_psd_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->mask_buffer, channel_blocks * 64 *
+                     sizeof(*s->mask_buffer), alloc_fail);
+    FF_ALLOC_OR_GOTO(avctx, s->qmant_buffer, total_coefs *
+                     sizeof(*s->qmant_buffer), alloc_fail);
     if (s->cpl_enabled) {
-        if (!FF_ALLOC_TYPED_ARRAY(s->cpl_coord_exp_buffer,  channel_blocks * 16) ||
-            !FF_ALLOC_TYPED_ARRAY(s->cpl_coord_mant_buffer, channel_blocks * 16))
-            return AVERROR(ENOMEM);
+        FF_ALLOC_OR_GOTO(avctx, s->cpl_coord_exp_buffer, channel_blocks * 16 *
+                         sizeof(*s->cpl_coord_exp_buffer), alloc_fail);
+        FF_ALLOC_OR_GOTO(avctx, s->cpl_coord_mant_buffer, channel_blocks * 16 *
+                         sizeof(*s->cpl_coord_mant_buffer), alloc_fail);
     }
     for (blk = 0; blk < s->num_blocks; blk++) {
         AC3Block *block = &s->blocks[blk];
-
-        if (!FF_ALLOCZ_TYPED_ARRAY(block->mdct_coef,   channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->exp,         channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->grouped_exp, channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->psd,         channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->band_psd,    channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->mask,        channels) ||
-            !FF_ALLOCZ_TYPED_ARRAY(block->qmant,       channels))
-            return AVERROR(ENOMEM);
-
+        FF_ALLOCZ_OR_GOTO(avctx, block->mdct_coef, channels * sizeof(*block->mdct_coef),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->exp, channels * sizeof(*block->exp),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->grouped_exp, channels * sizeof(*block->grouped_exp),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->psd, channels * sizeof(*block->psd),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->band_psd, channels * sizeof(*block->band_psd),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->mask, channels * sizeof(*block->mask),
+                          alloc_fail);
+        FF_ALLOCZ_OR_GOTO(avctx, block->qmant, channels * sizeof(*block->qmant),
+                          alloc_fail);
         if (s->cpl_enabled) {
-            if (!FF_ALLOCZ_TYPED_ARRAY(block->cpl_coord_exp,  channels) ||
-                !FF_ALLOCZ_TYPED_ARRAY(block->cpl_coord_mant, channels))
-                return AVERROR(ENOMEM);
+            FF_ALLOCZ_OR_GOTO(avctx, block->cpl_coord_exp, channels * sizeof(*block->cpl_coord_exp),
+                              alloc_fail);
+            FF_ALLOCZ_OR_GOTO(avctx, block->cpl_coord_mant, channels * sizeof(*block->cpl_coord_mant),
+                              alloc_fail);
         }
 
         for (ch = 0; ch < channels; ch++) {
@@ -2525,43 +2394,48 @@ static av_cold int allocate_buffers(AC3EncodeContext *s)
     }
 
     if (!s->fixed_point) {
-        if (!FF_ALLOCZ_TYPED_ARRAY(s->fixed_coef_buffer, total_coefs))
-            return AVERROR(ENOMEM);
+        FF_ALLOCZ_OR_GOTO(avctx, s->fixed_coef_buffer, total_coefs *
+                          sizeof(*s->fixed_coef_buffer), alloc_fail);
         for (blk = 0; blk < s->num_blocks; blk++) {
             AC3Block *block = &s->blocks[blk];
-            if (!FF_ALLOCZ_TYPED_ARRAY(block->fixed_coef, channels))
-                return AVERROR(ENOMEM);
+            FF_ALLOCZ_OR_GOTO(avctx, block->fixed_coef, channels *
+                              sizeof(*block->fixed_coef), alloc_fail);
             for (ch = 0; ch < channels; ch++)
                 block->fixed_coef[ch] = &s->fixed_coef_buffer[AC3_MAX_COEFS * (s->num_blocks * ch + blk)];
         }
     } else {
         for (blk = 0; blk < s->num_blocks; blk++) {
             AC3Block *block = &s->blocks[blk];
-            if (!FF_ALLOCZ_TYPED_ARRAY(block->fixed_coef, channels))
-                return AVERROR(ENOMEM);
+            FF_ALLOCZ_OR_GOTO(avctx, block->fixed_coef, channels *
+                              sizeof(*block->fixed_coef), alloc_fail);
             for (ch = 0; ch < channels; ch++)
                 block->fixed_coef[ch] = (int32_t *)block->mdct_coef[ch];
         }
     }
 
     return 0;
+alloc_fail:
+    return AVERROR(ENOMEM);
 }
 
 
 av_cold int ff_ac3_encode_init(AVCodecContext *avctx)
 {
-    static AVOnce init_static_once = AV_ONCE_INIT;
     AC3EncodeContext *s = avctx->priv_data;
     int ret, frame_size_58;
 
     s->avctx = avctx;
+
+    s->eac3 = avctx->codec_id == AV_CODEC_ID_EAC3;
+
+    ff_ac3_common_init();
 
     ret = validate_options(s);
     if (ret)
         return ret;
 
     avctx->frame_size = AC3_BLOCK_SIZE * s->num_blocks;
-    avctx->initial_padding = AC3_BLOCK_SIZE;
+    avctx->delay      = AC3_BLOCK_SIZE;
 
     s->bitstream_mode = avctx->audio_service_type;
     if (s->bitstream_mode == AV_AUDIO_SERVICE_TYPE_KARAOKE)
@@ -2578,24 +2452,51 @@ av_cold int ff_ac3_encode_init(AVCodecContext *avctx)
         s->crc_inv[1] = pow_poly((CRC16_POLY >> 1), (8 * frame_size_58) - 16, CRC16_POLY);
     }
 
-    if (!s->output_frame_header)
+    /* set function pointers */
+    if (CONFIG_AC3_FIXED_ENCODER && s->fixed_point) {
+        s->mdct_end                     = ff_ac3_fixed_mdct_end;
+        s->mdct_init                    = ff_ac3_fixed_mdct_init;
+        s->allocate_sample_buffers      = ff_ac3_fixed_allocate_sample_buffers;
+    } else if (CONFIG_AC3_ENCODER || CONFIG_EAC3_ENCODER) {
+        s->mdct_end                     = ff_ac3_float_mdct_end;
+        s->mdct_init                    = ff_ac3_float_mdct_init;
+        s->allocate_sample_buffers      = ff_ac3_float_allocate_sample_buffers;
+    }
+    if (CONFIG_EAC3_ENCODER && s->eac3)
+        s->output_frame_header = ff_eac3_output_frame_header;
+    else
         s->output_frame_header = ac3_output_frame_header;
 
     set_bandwidth(s);
 
+    exponent_init(s);
+
     bit_alloc_init(s);
+
+    ret = s->mdct_init(s);
+    if (ret)
+        goto init_fail;
 
     ret = allocate_buffers(s);
     if (ret)
-        return ret;
+        goto init_fail;
 
-    ff_audiodsp_init(&s->adsp);
-    ff_me_cmp_init(&s->mecc, avctx);
-    ff_ac3dsp_init(&s->ac3dsp);
+#if FF_API_OLD_ENCODE_AUDIO
+    avctx->coded_frame= avcodec_alloc_frame();
+    if (!avctx->coded_frame) {
+        ret = AVERROR(ENOMEM);
+        goto init_fail;
+    }
+#endif
+
+    ff_dsputil_init(&s->dsp, avctx);
+    avpriv_float_dsp_init(&s->fdsp, avctx->flags & CODEC_FLAG_BITEXACT);
+    ff_ac3dsp_init(&s->ac3dsp, avctx->flags & CODEC_FLAG_BITEXACT);
 
     dprint_options(s);
 
-    ff_thread_once(&init_static_once, exponent_init);
-
     return 0;
+init_fail:
+    ff_ac3_encode_close(avctx);
+    return ret;
 }

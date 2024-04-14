@@ -28,7 +28,6 @@
 
 #include "libavutil/channel_layout.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "libavutil/avstring.h"
 
@@ -36,7 +35,7 @@
 #define ISS_SIG_LEN 15
 #define MAX_TOKEN_SIZE 20
 
-typedef struct IssDemuxContext {
+typedef struct {
     int packet_size;
     int sample_start_pos;
 } IssDemuxContext;
@@ -59,7 +58,7 @@ static void get_token(AVIOContext *s, char *buf, int maxlen)
     buf[i] = 0; /* Ensure null terminated, but may be truncated */
 }
 
-static int iss_probe(const AVProbeData *p)
+static int iss_probe(AVProbeData *p)
 {
     if (strncmp(p->buf, ISS_SIG, ISS_SIG_LEN))
         return 0;
@@ -77,23 +76,14 @@ static av_cold int iss_read_header(AVFormatContext *s)
 
     get_token(pb, token, sizeof(token)); //"IMA_ADPCM_Sound"
     get_token(pb, token, sizeof(token)); //packet size
-    if (sscanf(token, "%d", &iss->packet_size) != 1) {
-        av_log(s, AV_LOG_ERROR, "Failed parsing packet size\n");
-        return AVERROR_INVALIDDATA;
-    }
+    sscanf(token, "%d", &iss->packet_size);
     get_token(pb, token, sizeof(token)); //File ID
     get_token(pb, token, sizeof(token)); //out size
     get_token(pb, token, sizeof(token)); //stereo
-    if (sscanf(token, "%d", &stereo) != 1) {
-        av_log(s, AV_LOG_ERROR, "Failed parsing stereo flag\n");
-        return AVERROR_INVALIDDATA;
-    }
+    sscanf(token, "%d", &stereo);
     get_token(pb, token, sizeof(token)); //Unknown1
     get_token(pb, token, sizeof(token)); //RateDivisor
-    if (sscanf(token, "%d", &rate_divisor) != 1) {
-        av_log(s, AV_LOG_ERROR, "Failed parsing rate_divisor\n");
-        return AVERROR_INVALIDDATA;
-    }
+    sscanf(token, "%d", &rate_divisor);
     get_token(pb, token, sizeof(token)); //Unknown2
     get_token(pb, token, sizeof(token)); //Version ID
     get_token(pb, token, sizeof(token)); //Size
@@ -108,24 +98,23 @@ static av_cold int iss_read_header(AVFormatContext *s)
     st = avformat_new_stream(s, NULL);
     if (!st)
         return AVERROR(ENOMEM);
-    st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-    st->codecpar->codec_id = AV_CODEC_ID_ADPCM_IMA_ISS;
-
+    st->codec->codec_type = AVMEDIA_TYPE_AUDIO;
+    st->codec->codec_id = AV_CODEC_ID_ADPCM_IMA_ISS;
     if (stereo) {
-        st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+        st->codec->channels       = 2;
+        st->codec->channel_layout = AV_CH_LAYOUT_STEREO;
     } else {
-        st->codecpar->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+        st->codec->channels       = 1;
+        st->codec->channel_layout = AV_CH_LAYOUT_MONO;
     }
-
-    st->codecpar->sample_rate = 44100;
+    st->codec->sample_rate = 44100;
     if(rate_divisor > 0)
-         st->codecpar->sample_rate /= rate_divisor;
-    st->codecpar->bits_per_coded_sample = 4;
-    st->codecpar->bit_rate = st->codecpar->ch_layout.nb_channels *
-                             st->codecpar->sample_rate *
-                             st->codecpar->bits_per_coded_sample;
-    st->codecpar->block_align = iss->packet_size;
-    avpriv_set_pts_info(st, 32, 1, st->codecpar->sample_rate);
+         st->codec->sample_rate /= rate_divisor;
+    st->codec->bits_per_coded_sample = 4;
+    st->codec->bit_rate = st->codec->channels * st->codec->sample_rate
+                                      * st->codec->bits_per_coded_sample;
+    st->codec->block_align = iss->packet_size;
+    avpriv_set_pts_info(st, 32, 1, st->codec->sample_rate);
 
     return 0;
 }
@@ -140,14 +129,14 @@ static int iss_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     pkt->stream_index = 0;
     pkt->pts = avio_tell(s->pb) - iss->sample_start_pos;
-    if (s->streams[0]->codecpar->ch_layout.nb_channels > 0)
-        pkt->pts /= s->streams[0]->codecpar->ch_layout.nb_channels * 2;
+    if(s->streams[0]->codec->channels > 0)
+        pkt->pts /= s->streams[0]->codec->channels*2;
     return 0;
 }
 
-const FFInputFormat ff_iss_demuxer = {
-    .p.name         = "iss",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Funcom ISS"),
+AVInputFormat ff_iss_demuxer = {
+    .name           = "iss",
+    .long_name      = NULL_IF_CONFIG_SMALL("Funcom ISS"),
     .priv_data_size = sizeof(IssDemuxContext),
     .read_probe     = iss_probe,
     .read_header    = iss_read_header,

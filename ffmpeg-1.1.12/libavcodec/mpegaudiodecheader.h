@@ -27,8 +27,7 @@
 #ifndef AVCODEC_MPEGAUDIODECHEADER_H
 #define AVCODEC_MPEGAUDIODECHEADER_H
 
-#include <stdint.h>
-#include "codec_id.h"
+#include "avcodec.h"
 
 #define MP3_MASK 0xFFFE0CCF
 
@@ -53,18 +52,14 @@ typedef struct MPADecodeHeader {
    that the frame size must be computed externally */
 int avpriv_mpegaudio_decode_header(MPADecodeHeader *s, uint32_t header);
 
-/* useful helper to get MPEG audio stream info. Return -1 if error in
+/* useful helper to get mpeg audio stream infos. Return -1 if error in
    header, otherwise the coded frame size in bytes */
-int ff_mpa_decode_header(uint32_t head, int *sample_rate,
-                         int *channels, int *frame_size, int *bitrate, enum AVCodecID *codec_id);
+int avpriv_mpa_decode_header(AVCodecContext *avctx, uint32_t head, int *sample_rate, int *channels, int *frame_size, int *bitrate);
 
 /* fast header check for resync */
 static inline int ff_mpa_check_header(uint32_t header){
     /* header */
     if ((header & 0xffe00000) != 0xffe00000)
-        return -1;
-    /* version check */
-    if ((header & (3<<19)) == 1<<19)
         return -1;
     /* layer check */
     if ((header & (3<<17)) == 0)

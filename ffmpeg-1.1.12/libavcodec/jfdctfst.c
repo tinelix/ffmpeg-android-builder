@@ -66,9 +66,10 @@
  * Independent JPEG Group's fast AAN dct.
  */
 
-#include <stdint.h>
-#include "libavutil/attributes.h"
-#include "fdctdsp.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include "libavutil/common.h"
+#include "dsputil.h"
 
 #define DCTSIZE 8
 #define GLOBAL(x) x
@@ -135,17 +136,17 @@
 #endif
 
 
-/* Multiply a int16_t variable by an int32_t constant, and immediately
- * descale to yield a int16_t result.
+/* Multiply a DCTELEM variable by an int32_t constant, and immediately
+ * descale to yield a DCTELEM result.
  */
 
-#define MULTIPLY(var,const)  ((int16_t) DESCALE((var) * (const), CONST_BITS))
+#define MULTIPLY(var,const)  ((DCTELEM) DESCALE((var) * (const), CONST_BITS))
 
-static av_always_inline void row_fdct(int16_t * data){
+static av_always_inline void row_fdct(DCTELEM * data){
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1, z2, z3, z4, z5, z11, z13;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   /* Pass 1: process rows. */
@@ -204,12 +205,12 @@ static av_always_inline void row_fdct(int16_t * data){
  */
 
 GLOBAL(void)
-ff_fdct_ifast (int16_t * data)
+ff_fdct_ifast (DCTELEM * data)
 {
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1, z2, z3, z4, z5, z11, z13;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   row_fdct(data);
@@ -270,12 +271,12 @@ ff_fdct_ifast (int16_t * data)
  */
 
 GLOBAL(void)
-ff_fdct_ifast248 (int16_t * data)
+ff_fdct_ifast248 (DCTELEM * data)
 {
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   int tmp10, tmp11, tmp12, tmp13;
   int z1;
-  int16_t *dataptr;
+  DCTELEM *dataptr;
   int ctr;
 
   row_fdct(data);

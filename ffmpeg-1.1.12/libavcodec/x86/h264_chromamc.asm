@@ -1,5 +1,5 @@
 ;******************************************************************************
-;* MMX/SSSE3-optimized functions for H.264 chroma MC
+;* MMX/SSSE3-optimized functions for H264 chroma MC
 ;* Copyright (c) 2005 Zoltan Hidvegi <hzoli -a- hzoli -d- com>,
 ;*               2005-2008 Loren Merritt
 ;*
@@ -60,7 +60,7 @@ rnd_rv40_1d_tbl: times 4 dw  0
 cextern pw_3
 cextern pw_4
 cextern pw_8
-pw_28: times 8 dw 28
+cextern pw_28
 cextern pw_32
 cextern pw_64
 
@@ -91,7 +91,7 @@ SECTION .text
 
 %macro chroma_mc8_mmx_func 2-3
 %ifidn %2, rv40
-%if PIC
+%ifdef PIC
 %define rnd_1d_rv40 r8
 %define rnd_2d_rv40 r8
 %define extra_regs 2
@@ -103,16 +103,18 @@ SECTION .text
 %else
 %define extra_regs 0
 %endif ; rv40
-; void ff_put/avg_h264_chroma_mc8_*(uint8_t *dst /* align 8 */,
-;                                   const uint8_t *src /* align 1 */,
-;                                   ptrdiff_t stride, int h, int mx, int my)
+; put/avg_h264_chroma_mc8_*(uint8_t *dst /*align 8*/, uint8_t *src /*align 1*/,
+;                           int stride, int h, int mx, int my)
 cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
+%if ARCH_X86_64
+    movsxd        r2, r2d
+%endif
     mov          r6d, r5d
     or           r6d, r4d
     jne .at_least_one_non_zero
     ; mx == 0 AND my == 0 - no filter needed
     mv0_pixels_mc8
-    RET
+    REP_RET
 
 .at_least_one_non_zero:
 %ifidn %2, rv40
@@ -147,7 +149,7 @@ cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
     or           r4d, r5d       ; x + y
 
 %ifidn %2, rv40
-%if PIC
+%ifdef PIC
     lea           r8, [rnd_rv40_1d_tbl]
 %endif
 %if ARCH_X86_64 == 0
@@ -192,13 +194,13 @@ cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
     add           r1, r2
     dec           r3d
     jne .next1drow
-    RET
+    REP_RET
 
 .both_non_zero: ; general case, bilinear
     movd          m4, r4d         ; x
     movd          m6, r5d         ; y
 %ifidn %2, rv40
-%if PIC
+%ifdef PIC
     lea           r8, [rnd_rv40_2d_tbl]
 %endif
 %if ARCH_X86_64 == 0
@@ -283,11 +285,14 @@ cglobal %1_%2_chroma_mc8%3, 6, 7 + extra_regs, 0
 %macro chroma_mc4_mmx_func 2
 %define extra_regs 0
 %ifidn %2, rv40
-%if PIC
+%ifdef PIC
 %define extra_regs 1
 %endif ; PIC
 %endif ; rv40
 cglobal %1_%2_chroma_mc4, 6, 6 + extra_regs, 0
+%if ARCH_X86_64
+    movsxd        r2, r2d
+%endif
     pxor          m7, m7
     movd          m2, r4d         ; x
     movd          m3, r5d         ; y
@@ -301,7 +306,7 @@ cglobal %1_%2_chroma_mc4, 6, 6 + extra_regs, 0
     psubw         m5, m3
 
 %ifidn %2, rv40
-%if PIC
+%ifdef PIC
    lea            r6, [rnd_rv40_2d_tbl]
 %define rnd_2d_rv40 r6
 %else
@@ -365,11 +370,15 @@ cglobal %1_%2_chroma_mc4, 6, 6 + extra_regs, 0
     add           r0, r2
     sub          r3d, 2
     jnz .next2rows
-    RET
+    REP_RET
 %endmacro
 
 %macro chroma_mc2_mmx_func 2
 cglobal %1_%2_chroma_mc2, 6, 7, 0
+%if ARCH_X86_64
+    movsxd        r2, r2d
+%endif
+
     mov          r6d, r4d
     shl          r4d, 16
     sub          r4d, r6d
@@ -407,7 +416,7 @@ cglobal %1_%2_chroma_mc2, 6, 7, 0
     add           r0, r2
     sub          r3d, 1
     jnz .nextrow
-    RET
+    REP_RET
 %endmacro
 
 %define rnd_1d_h264 pw_4
@@ -418,11 +427,11 @@ cglobal %1_%2_chroma_mc2, 6, 7, 0
 %macro NOTHING 2-3
 %endmacro
 %macro DIRECT_AVG 2
-    PAVGB         %1, %2
+    PAVG          %1, %2
 %endmacro
 %macro COPY_AVG 3
     movd          %2, %3
-    PAVGB         %1, %2
+    PAVG          %1, %2
 %endmacro
 
 INIT_MMX mmx
@@ -439,6 +448,7 @@ chroma_mc2_mmx_func put, h264
 
 %define CHROMAMC_AVG  DIRECT_AVG
 %define CHROMAMC_AVG4 COPY_AVG
+%define PAVG          pavgb
 chroma_mc8_mmx_func avg, h264, _rnd
 chroma_mc8_mmx_func avg, vc1,  _nornd
 chroma_mc8_mmx_func avg, rv40
@@ -446,14 +456,25 @@ chroma_mc4_mmx_func avg, h264
 chroma_mc4_mmx_func avg, rv40
 chroma_mc2_mmx_func avg, h264
 
+%define PAVG          pavgusb
+INIT_MMX 3dnow
+chroma_mc8_mmx_func avg, h264, _rnd
+chroma_mc8_mmx_func avg, vc1,  _nornd
+chroma_mc8_mmx_func avg, rv40
+chroma_mc4_mmx_func avg, h264
+chroma_mc4_mmx_func avg, rv40
+
 %macro chroma_mc8_ssse3_func 2-3
 cglobal %1_%2_chroma_mc8%3, 6, 7, 8
+%if ARCH_X86_64
+    movsxd        r2, r2d
+%endif
     mov          r6d, r5d
     or           r6d, r4d
     jne .at_least_one_non_zero
     ; mx == 0 AND my == 0 - no filter needed
     mv0_pixels_mc8
-    RET
+    REP_RET
 
 .at_least_one_non_zero:
     test         r5d, r5d
@@ -514,7 +535,7 @@ cglobal %1_%2_chroma_mc8%3, 6, 7, 8
     sub          r3d, 2
     lea           r0, [r0+r2*2]
     jg .next2rows
-    RET
+    REP_RET
 
 .my_is_zero:
     mov          r5d, r4d
@@ -551,7 +572,7 @@ cglobal %1_%2_chroma_mc8%3, 6, 7, 8
     lea           r0, [r0+r2*2]
     lea           r1, [r1+r2*2]
     jg .next2xrows
-    RET
+    REP_RET
 
 .mx_is_zero:
     mov          r4d, r5d
@@ -588,11 +609,14 @@ cglobal %1_%2_chroma_mc8%3, 6, 7, 8
     sub          r3d, 2
     lea           r0, [r0+r2*2]
     jg .next2yrows
-    RET
+    REP_RET
 %endmacro
 
 %macro chroma_mc4_ssse3_func 2
 cglobal %1_%2_chroma_mc4, 6, 7, 0
+%if ARCH_X86_64
+    movsxd        r2, r2d
+%endif
     mov           r6, r4
     shl          r4d, 8
     sub          r4d, r6d
@@ -638,7 +662,7 @@ cglobal %1_%2_chroma_mc4, 6, 7, 0
     sub          r3d, 2
     lea           r0, [r0+r2*2]
     jg .next2rows
-    RET
+    REP_RET
 %endmacro
 
 %define CHROMAMC_AVG NOTHING
@@ -649,6 +673,7 @@ INIT_MMX ssse3
 chroma_mc4_ssse3_func put, h264
 
 %define CHROMAMC_AVG DIRECT_AVG
+%define PAVG         pavgb
 INIT_XMM ssse3
 chroma_mc8_ssse3_func avg, h264, _rnd
 chroma_mc8_ssse3_func avg, vc1,  _nornd

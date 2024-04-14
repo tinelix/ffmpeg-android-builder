@@ -19,14 +19,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-/**
- * @file
- * Argonaut Games' Creature Shock demuxer
- * @see http://wiki.multimedia.cx/index.php?title=AVS
- */
-
 #include "avformat.h"
-#include "demux.h"
 #include "voc.h"
 
 
@@ -51,15 +44,13 @@ typedef enum avs_block_type {
     AVS_GAME_DATA = 0x04,
 } AvsBlockType;
 
-static int avs_probe(const AVProbeData * p)
+static int avs_probe(AVProbeData * p)
 {
     const uint8_t *d;
 
     d = p->buf;
     if (d[0] == 'w' && d[1] == 'W' && d[2] == 0x10 && d[3] == 0)
-        /* Ensure the buffer probe scores higher than the extension probe.
-         * This avoids problems with misdetection as AviSynth scripts. */
-        return AVPROBE_SCORE_EXTENSION + 5;
+        return 50;
 
     return 0;
 }
@@ -115,6 +106,7 @@ avs_read_video_packet(AVFormatContext * s, AVPacket * pkt,
     pkt->data[palette_size + 3] = (size >> 8) & 0xFF;
     ret = avio_read(s->pb, pkt->data + palette_size + 4, size - 4) + 4;
     if (ret < size) {
+        av_free_packet(pkt);
         return AVERROR(EIO);
     }
 
@@ -129,8 +121,7 @@ avs_read_video_packet(AVFormatContext * s, AVPacket * pkt,
 static int avs_read_audio_packet(AVFormatContext * s, AVPacket * pkt)
 {
     AvsFormat *avs = s->priv_data;
-    int ret;
-    int64_t size;
+    int ret, size;
 
     size = avio_tell(s->pb);
     ret = ff_voc_get_packet(s, pkt, avs->st_audio, avs->remaining_audio_size);
@@ -141,10 +132,6 @@ static int avs_read_audio_packet(AVFormatContext * s, AVPacket * pkt)
         return 0;    /* this indicate EOS */
     if (ret < 0)
         return ret;
-    if (size != (int)size) {
-        av_packet_unref(pkt);
-        return AVERROR(EDOM);
-    }
 
     pkt->stream_index = avs->st_audio->index;
     pkt->flags |= AV_PKT_FLAG_KEY;
@@ -193,13 +180,13 @@ static int avs_read_packet(AVFormatContext * s, AVPacket * pkt)
             case AVS_VIDEO:
                 if (!avs->st_video) {
                     avs->st_video = avformat_new_stream(s, NULL);
-                    if (!avs->st_video)
+                    if (avs->st_video == NULL)
                         return AVERROR(ENOMEM);
-                    avs->st_video->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-                    avs->st_video->codecpar->codec_id = AV_CODEC_ID_AVS;
-                    avs->st_video->codecpar->width = avs->width;
-                    avs->st_video->codecpar->height = avs->height;
-                    avs->st_video->codecpar->bits_per_coded_sample=avs->bits_per_sample;
+                    avs->st_video->codec->codec_type = AVMEDIA_TYPE_VIDEO;
+                    avs->st_video->codec->codec_id = AV_CODEC_ID_AVS;
+                    avs->st_video->codec->width = avs->width;
+                    avs->st_video->codec->height = avs->height;
+                    avs->st_video->codec->bits_per_coded_sample=avs->bits_per_sample;
                     avs->st_video->nb_frames = avs->nb_frames;
 #if FF_API_R_FRAME_RATE
                     avs->st_video->r_frame_rate =
@@ -212,9 +199,9 @@ static int avs_read_packet(AVFormatContext * s, AVPacket * pkt)
             case AVS_AUDIO:
                 if (!avs->st_audio) {
                     avs->st_audio = avformat_new_stream(s, NULL);
-                    if (!avs->st_audio)
+                    if (avs->st_audio == NULL)
                         return AVERROR(ENOMEM);
-                    avs->st_audio->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+                    avs->st_audio->codec->codec_type = AVMEDIA_TYPE_AUDIO;
                 }
                 avs->remaining_audio_size = size - 4;
                 size = avs_read_audio_packet(s, pkt);
@@ -229,11 +216,17 @@ static int avs_read_packet(AVFormatContext * s, AVPacket * pkt)
     }
 }
 
-const FFInputFormat ff_avs_demuxer = {
-    .p.name         = "avs",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Argonaut Games Creature Shock"),
+static int avs_read_close(AVFormatContext * s)
+{
+    return 0;
+}
+
+AVInputFormat ff_avs_demuxer = {
+    .name           = "avs",
+    .long_name      = NULL_IF_CONFIG_SMALL("AVS"),
     .priv_data_size = sizeof(AvsFormat),
     .read_probe     = avs_probe,
     .read_header    = avs_read_header,
     .read_packet    = avs_read_packet,
+    .read_close     = avs_read_close,
 };

@@ -18,13 +18,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libavutil/attributes.h"
 #include "libavcodec/flacdsp.h"
+#include "config.h"
 
 void ff_flac_lpc_16_arm(int32_t *samples, const int coeffs[32], int order,
                         int qlevel, int len);
 
-av_cold void ff_flacdsp_init_arm(FLACDSPContext *c, enum AVSampleFormat fmt, int channels)
+av_cold void ff_flacdsp_init_arm(FLACDSPContext *c, enum AVSampleFormat fmt,
+                                 int bps)
 {
-    c->lpc16 = ff_flac_lpc_16_arm;
+    if (bps <= 16)
+        c->lpc = ff_flac_lpc_16_arm;
 }

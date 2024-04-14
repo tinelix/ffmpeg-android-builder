@@ -25,14 +25,12 @@
  */
 
 #include "libavutil/intreadwrite.h"
-#include "libavutil/imgutils.h"
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 
 #define RAND_TAG MKBETAG('R','a','n','d')
 
-typedef struct FilmstripDemuxContext {
+typedef struct {
     int leading;
 } FilmstripDemuxContext;
 
@@ -42,7 +40,7 @@ static int read_header(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     AVStream *st;
 
-    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL))
+    if (!s->pb->seekable)
         return AVERROR(EIO);
 
     avio_seek(pb, avio_size(pb) - 36, SEEK_SET);
@@ -57,22 +55,18 @@ static int read_header(AVFormatContext *s)
 
     st->nb_frames = avio_rb32(pb);
     if (avio_rb16(pb) != 0) {
-        avpriv_request_sample(s, "Unsupported packing method");
+        av_log_ask_for_sample(s, "unsupported packing method\n");
         return AVERROR_PATCHWELCOME;
     }
 
     avio_skip(pb, 2);
-    st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-    st->codecpar->codec_id   = AV_CODEC_ID_RAWVIDEO;
-    st->codecpar->format     = AV_PIX_FMT_RGBA;
-    st->codecpar->codec_tag  = 0; /* no fourcc */
-    st->codecpar->width      = avio_rb16(pb);
-    st->codecpar->height     = avio_rb16(pb);
+    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
+    st->codec->codec_id   = AV_CODEC_ID_RAWVIDEO;
+    st->codec->pix_fmt    = AV_PIX_FMT_RGBA;
+    st->codec->codec_tag  = 0; /* no fourcc */
+    st->codec->width      = avio_rb16(pb);
+    st->codec->height     = avio_rb16(pb);
     film->leading         = avio_rb16(pb);
-
-    if (av_image_check_size(st->codecpar->width, st->codecpar->height, 0, s) < 0)
-        return AVERROR_INVALIDDATA;
-
     avpriv_set_pts_info(st, 64, 1, avio_rb16(pb));
 
     avio_seek(pb, 0, SEEK_SET);
@@ -86,11 +80,11 @@ static int read_packet(AVFormatContext *s,
     FilmstripDemuxContext *film = s->priv_data;
     AVStream *st = s->streams[0];
 
-    if (avio_feof(s->pb))
-        return AVERROR_EOF;
-    pkt->dts = avio_tell(s->pb) / (st->codecpar->width * (int64_t)(st->codecpar->height + film->leading) * 4);
-    pkt->size = av_get_packet(s->pb, pkt, st->codecpar->width * st->codecpar->height * 4);
-    avio_skip(s->pb, st->codecpar->width * (int64_t) film->leading * 4);
+    if (url_feof(s->pb))
+        return AVERROR(EIO);
+    pkt->dts = avio_tell(s->pb) / (st->codec->width * (st->codec->height + film->leading) * 4);
+    pkt->size = av_get_packet(s->pb, pkt, st->codec->width * st->codec->height * 4);
+    avio_skip(s->pb, st->codec->width * film->leading * 4);
     if (pkt->size < 0)
         return pkt->size;
     pkt->flags |= AV_PKT_FLAG_KEY;
@@ -100,17 +94,17 @@ static int read_packet(AVFormatContext *s,
 static int read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
     AVStream *st = s->streams[stream_index];
-    if (avio_seek(s->pb, FFMAX(timestamp, 0) * st->codecpar->width * st->codecpar->height * 4, SEEK_SET) < 0)
+    if (avio_seek(s->pb, FFMAX(timestamp, 0) * st->codec->width * st->codec->height * 4, SEEK_SET) < 0)
         return -1;
     return 0;
 }
 
-const FFInputFormat ff_filmstrip_demuxer = {
-    .p.name         = "filmstrip",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Adobe Filmstrip"),
-    .p.extensions   = "flm",
+AVInputFormat ff_filmstrip_demuxer = {
+    .name           = "filmstrip",
+    .long_name      = NULL_IF_CONFIG_SMALL("Adobe Filmstrip"),
     .priv_data_size = sizeof(FilmstripDemuxContext),
     .read_header    = read_header,
     .read_packet    = read_packet,
     .read_seek      = read_seek,
+    .extensions     = "flm",
 };

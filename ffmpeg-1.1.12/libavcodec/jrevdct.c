@@ -62,13 +62,8 @@
  * Independent JPEG Group's LLM idct.
  */
 
-#include <stddef.h>
-#include <stdint.h>
-
-#include "libavutil/intreadwrite.h"
-
-#include "dct.h"
-#include "idctdsp.h"
+#include "libavutil/common.h"
+#include "dsputil.h"
 
 #define EIGHT_BIT_SAMPLES
 
@@ -79,7 +74,7 @@
 
 #define RIGHT_SHIFT(x, n) ((x) >> (n))
 
-typedef int16_t DCTBLOCK[DCTSIZE2];
+typedef DCTELEM DCTBLOCK[DCTSIZE2];
 
 #define CONST_BITS 13
 
@@ -218,7 +213,7 @@ void ff_j_rev_dct(DCTBLOCK data)
   int32_t tmp10, tmp11, tmp12, tmp13;
   int32_t z1, z2, z3, z4, z5;
   int32_t d0, d1, d2, d3, d4, d5, d6, d7;
-  register int16_t *dataptr;
+  register DCTELEM *dataptr;
   int rowctr;
 
   /* Pass 1: process rows. */
@@ -237,7 +232,7 @@ void ff_j_rev_dct(DCTBLOCK data)
      * row DCT calculations can be simplified this way.
      */
 
-    register uint8_t *idataptr = (uint8_t*)dataptr;
+    register int *idataptr = (int*)dataptr;
 
     /* WARNING: we do the same permutation as MMX idct to simplify the
        video core */
@@ -254,13 +249,13 @@ void ff_j_rev_dct(DCTBLOCK data)
       /* AC terms all zero */
       if (d0) {
           /* Compute a 32 bit value to assign. */
-          int16_t dcval = (int16_t) (d0 * (1 << PASS1_BITS));
-          register unsigned v = (dcval & 0xffff) | ((uint32_t)dcval << 16);
+          DCTELEM dcval = (DCTELEM) (d0 << PASS1_BITS);
+          register int v = (dcval & 0xffff) | ((dcval << 16) & 0xffff0000);
 
-          AV_WN32A(&idataptr[ 0], v);
-          AV_WN32A(&idataptr[ 4], v);
-          AV_WN32A(&idataptr[ 8], v);
-          AV_WN32A(&idataptr[12], v);
+          idataptr[0] = v;
+          idataptr[1] = v;
+          idataptr[2] = v;
+          idataptr[3] = v;
       }
 
       dataptr += DCTSIZE;       /* advance pointer to next row */
@@ -277,8 +272,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = z1 + MULTIPLY(-d6, FIX_1_847759065);
                     tmp3 = z1 + MULTIPLY(d2, FIX_0_765366865);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -289,8 +284,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = MULTIPLY(-d6, FIX_1_306562965);
                     tmp3 = MULTIPLY(d6, FIX_0_541196100);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -303,8 +298,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = MULTIPLY(d2, FIX_0_541196100);
                     tmp3 = MULTIPLY(d2, FIX_1_306562965);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -312,8 +307,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp12 = tmp1 - tmp2;
             } else {
                     /* d0 != 0, d2 == 0, d4 != 0, d6 == 0 */
-                    tmp10 = tmp13 = (d0 + d4) * CONST_SCALE;
-                    tmp11 = tmp12 = (d0 - d4) * CONST_SCALE;
+                    tmp10 = tmp13 = (d0 + d4) << CONST_BITS;
+                    tmp11 = tmp12 = (d0 - d4) << CONST_BITS;
             }
       }
 
@@ -579,14 +574,14 @@ void ff_j_rev_dct(DCTBLOCK data)
 }
     /* Final output stage: inputs are tmp10..tmp13, tmp0..tmp3 */
 
-    dataptr[0] = (int16_t) DESCALE(tmp10 + tmp3, CONST_BITS-PASS1_BITS);
-    dataptr[7] = (int16_t) DESCALE(tmp10 - tmp3, CONST_BITS-PASS1_BITS);
-    dataptr[1] = (int16_t) DESCALE(tmp11 + tmp2, CONST_BITS-PASS1_BITS);
-    dataptr[6] = (int16_t) DESCALE(tmp11 - tmp2, CONST_BITS-PASS1_BITS);
-    dataptr[2] = (int16_t) DESCALE(tmp12 + tmp1, CONST_BITS-PASS1_BITS);
-    dataptr[5] = (int16_t) DESCALE(tmp12 - tmp1, CONST_BITS-PASS1_BITS);
-    dataptr[3] = (int16_t) DESCALE(tmp13 + tmp0, CONST_BITS-PASS1_BITS);
-    dataptr[4] = (int16_t) DESCALE(tmp13 - tmp0, CONST_BITS-PASS1_BITS);
+    dataptr[0] = (DCTELEM) DESCALE(tmp10 + tmp3, CONST_BITS-PASS1_BITS);
+    dataptr[7] = (DCTELEM) DESCALE(tmp10 - tmp3, CONST_BITS-PASS1_BITS);
+    dataptr[1] = (DCTELEM) DESCALE(tmp11 + tmp2, CONST_BITS-PASS1_BITS);
+    dataptr[6] = (DCTELEM) DESCALE(tmp11 - tmp2, CONST_BITS-PASS1_BITS);
+    dataptr[2] = (DCTELEM) DESCALE(tmp12 + tmp1, CONST_BITS-PASS1_BITS);
+    dataptr[5] = (DCTELEM) DESCALE(tmp12 - tmp1, CONST_BITS-PASS1_BITS);
+    dataptr[3] = (DCTELEM) DESCALE(tmp13 + tmp0, CONST_BITS-PASS1_BITS);
+    dataptr[4] = (DCTELEM) DESCALE(tmp13 - tmp0, CONST_BITS-PASS1_BITS);
 
     dataptr += DCTSIZE;         /* advance pointer to next row */
   }
@@ -623,8 +618,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = z1 + MULTIPLY(-d6, FIX_1_847759065);
                     tmp3 = z1 + MULTIPLY(d2, FIX_0_765366865);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -635,8 +630,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = MULTIPLY(-d6, FIX_1_306562965);
                     tmp3 = MULTIPLY(d6, FIX_0_541196100);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -649,8 +644,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp2 = MULTIPLY(d2, FIX_0_541196100);
                     tmp3 = MULTIPLY(d2, FIX_1_306562965);
 
-                    tmp0 = (d0 + d4) * CONST_SCALE;
-                    tmp1 = (d0 - d4) * CONST_SCALE;
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -658,8 +653,8 @@ void ff_j_rev_dct(DCTBLOCK data)
                     tmp12 = tmp1 - tmp2;
             } else {
                     /* d0 != 0, d2 == 0, d4 != 0, d6 == 0 */
-                    tmp10 = tmp13 = (d0 + d4) * CONST_SCALE;
-                    tmp11 = tmp12 = (d0 - d4) * CONST_SCALE;
+                    tmp10 = tmp13 = (d0 + d4) << CONST_BITS;
+                    tmp11 = tmp12 = (d0 - d4) << CONST_BITS;
             }
     }
 
@@ -925,21 +920,21 @@ void ff_j_rev_dct(DCTBLOCK data)
 
     /* Final output stage: inputs are tmp10..tmp13, tmp0..tmp3 */
 
-    dataptr[DCTSIZE*0] = (int16_t) DESCALE(tmp10 + tmp3,
+    dataptr[DCTSIZE*0] = (DCTELEM) DESCALE(tmp10 + tmp3,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*7] = (int16_t) DESCALE(tmp10 - tmp3,
+    dataptr[DCTSIZE*7] = (DCTELEM) DESCALE(tmp10 - tmp3,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*1] = (int16_t) DESCALE(tmp11 + tmp2,
+    dataptr[DCTSIZE*1] = (DCTELEM) DESCALE(tmp11 + tmp2,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*6] = (int16_t) DESCALE(tmp11 - tmp2,
+    dataptr[DCTSIZE*6] = (DCTELEM) DESCALE(tmp11 - tmp2,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*2] = (int16_t) DESCALE(tmp12 + tmp1,
+    dataptr[DCTSIZE*2] = (DCTELEM) DESCALE(tmp12 + tmp1,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*5] = (int16_t) DESCALE(tmp12 - tmp1,
+    dataptr[DCTSIZE*5] = (DCTELEM) DESCALE(tmp12 - tmp1,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*3] = (int16_t) DESCALE(tmp13 + tmp0,
+    dataptr[DCTSIZE*3] = (DCTELEM) DESCALE(tmp13 + tmp0,
                                            CONST_BITS+PASS1_BITS+3);
-    dataptr[DCTSIZE*4] = (int16_t) DESCALE(tmp13 - tmp0,
+    dataptr[DCTSIZE*4] = (DCTELEM) DESCALE(tmp13 - tmp0,
                                            CONST_BITS+PASS1_BITS+3);
 
     dataptr++;                  /* advance pointer to next column */
@@ -956,7 +951,7 @@ void ff_j_rev_dct4(DCTBLOCK data)
   int32_t tmp10, tmp11, tmp12, tmp13;
   int32_t z1;
   int32_t d0, d2, d4, d6;
-  register int16_t *dataptr;
+  register DCTELEM *dataptr;
   int rowctr;
 
   /* Pass 1: process rows. */
@@ -977,7 +972,7 @@ void ff_j_rev_dct4(DCTBLOCK data)
      * row DCT calculations can be simplified this way.
      */
 
-    register uint8_t *idataptr = (uint8_t*)dataptr;
+    register int *idataptr = (int*)dataptr;
 
     d0 = dataptr[0];
     d2 = dataptr[1];
@@ -988,11 +983,11 @@ void ff_j_rev_dct4(DCTBLOCK data)
       /* AC terms all zero */
       if (d0) {
           /* Compute a 32 bit value to assign. */
-          int16_t dcval = (int16_t) (d0 * (1 << PASS1_BITS));
-          register unsigned v = (dcval & 0xffff) | ((uint32_t)dcval << 16);
+          DCTELEM dcval = (DCTELEM) (d0 << PASS1_BITS);
+          register int v = (dcval & 0xffff) | ((dcval << 16) & 0xffff0000);
 
-          AV_WN32A(&idataptr[0], v);
-          AV_WN32A(&idataptr[4], v);
+          idataptr[0] = v;
+          idataptr[1] = v;
       }
 
       dataptr += DCTSTRIDE;     /* advance pointer to next row */
@@ -1008,8 +1003,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = z1 + MULTIPLY(-d6, FIX_1_847759065);
                     tmp3 = z1 + MULTIPLY(d2, FIX_0_765366865);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1020,8 +1015,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = MULTIPLY(-d6, FIX_1_306562965);
                     tmp3 = MULTIPLY(d6, FIX_0_541196100);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1034,8 +1029,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = MULTIPLY(d2, FIX_0_541196100);
                     tmp3 = MULTIPLY(d2, FIX_1_306562965);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1043,17 +1038,17 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp12 = tmp1 - tmp2;
             } else {
                     /* d0 != 0, d2 == 0, d4 != 0, d6 == 0 */
-                    tmp10 = tmp13 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp11 = tmp12 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp10 = tmp13 = (d0 + d4) << CONST_BITS;
+                    tmp11 = tmp12 = (d0 - d4) << CONST_BITS;
             }
       }
 
     /* Final output stage: inputs are tmp10..tmp13, tmp0..tmp3 */
 
-    dataptr[0] = (int16_t) DESCALE(tmp10, CONST_BITS-PASS1_BITS);
-    dataptr[1] = (int16_t) DESCALE(tmp11, CONST_BITS-PASS1_BITS);
-    dataptr[2] = (int16_t) DESCALE(tmp12, CONST_BITS-PASS1_BITS);
-    dataptr[3] = (int16_t) DESCALE(tmp13, CONST_BITS-PASS1_BITS);
+    dataptr[0] = (DCTELEM) DESCALE(tmp10, CONST_BITS-PASS1_BITS);
+    dataptr[1] = (DCTELEM) DESCALE(tmp11, CONST_BITS-PASS1_BITS);
+    dataptr[2] = (DCTELEM) DESCALE(tmp12, CONST_BITS-PASS1_BITS);
+    dataptr[3] = (DCTELEM) DESCALE(tmp13, CONST_BITS-PASS1_BITS);
 
     dataptr += DCTSTRIDE;       /* advance pointer to next row */
   }
@@ -1086,8 +1081,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = z1 + MULTIPLY(-d6, FIX_1_847759065);
                     tmp3 = z1 + MULTIPLY(d2, FIX_0_765366865);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1098,8 +1093,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = MULTIPLY(-d6, FIX_1_306562965);
                     tmp3 = MULTIPLY(d6, FIX_0_541196100);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1112,8 +1107,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp2 = MULTIPLY(d2, FIX_0_541196100);
                     tmp3 = MULTIPLY(d2, FIX_1_306562965);
 
-                    tmp0 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp1 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp0 = (d0 + d4) << CONST_BITS;
+                    tmp1 = (d0 - d4) << CONST_BITS;
 
                     tmp10 = tmp0 + tmp3;
                     tmp13 = tmp0 - tmp3;
@@ -1121,8 +1116,8 @@ void ff_j_rev_dct4(DCTBLOCK data)
                     tmp12 = tmp1 - tmp2;
             } else {
                     /* d0 != 0, d2 == 0, d4 != 0, d6 == 0 */
-                    tmp10 = tmp13 = (d0 + d4) * (1 << CONST_BITS);
-                    tmp11 = tmp12 = (d0 - d4) * (1 << CONST_BITS);
+                    tmp10 = tmp13 = (d0 + d4) << CONST_BITS;
+                    tmp11 = tmp12 = (d0 - d4) << CONST_BITS;
             }
     }
 
@@ -1158,15 +1153,3 @@ void ff_j_rev_dct1(DCTBLOCK data){
 
 #undef FIX
 #undef CONST_BITS
-
-void ff_jref_idct_put(uint8_t *dest, ptrdiff_t line_size, int16_t *block)
-{
-    ff_j_rev_dct(block);
-    ff_put_pixels_clamped_c(block, dest, line_size);
-}
-
-void ff_jref_idct_add(uint8_t *dest, ptrdiff_t line_size, int16_t *block)
-{
-    ff_j_rev_dct(block);
-    ff_add_pixels_clamped_c(block, dest, line_size);
-}

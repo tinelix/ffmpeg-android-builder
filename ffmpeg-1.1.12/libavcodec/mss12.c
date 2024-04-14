@@ -23,11 +23,8 @@
  * Common functions for Microsoft Screen 1 and 2
  */
 
-#include <inttypes.h>
-
 #include "libavutil/intfloat.h"
 #include "libavutil/intreadwrite.h"
-#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "mss12.h"
 
@@ -162,8 +159,6 @@ static av_always_inline int decode_pixel(ArithCoder *acoder, PixContext *pctx,
 {
     int i, val, pix;
 
-    if (acoder->overread > MAX_OVERREAD)
-        return AVERROR_INVALIDDATA;
     val = acoder->get_model_sym(acoder, &pctx->cache_model);
     if (val < pctx->num_syms) {
         if (any_ngb) {
@@ -200,7 +195,7 @@ static av_always_inline int decode_pixel(ArithCoder *acoder, PixContext *pctx,
 }
 
 static int decode_pixel_in_context(ArithCoder *acoder, PixContext *pctx,
-                                   uint8_t *src, ptrdiff_t stride, int x, int y,
+                                   uint8_t *src, int stride, int x, int y,
                                    int has_right)
 {
     uint8_t neighbours[4];
@@ -292,15 +287,13 @@ static int decode_pixel_in_context(ArithCoder *acoder, PixContext *pctx,
         return decode_pixel(acoder, pctx, ref_pix, nlen, 1);
 }
 
-static int decode_region(ArithCoder *acoder, uint8_t *dst, uint8_t *rgb_dst,
-                         int x, int y, int width, int height, ptrdiff_t stride,
-                         ptrdiff_t rgb_stride, PixContext *pctx,
-                         const uint32_t *pal)
+static int decode_region(ArithCoder *acoder, uint8_t *dst, uint8_t *rgb_pic,
+                         int x, int y, int width, int height, int stride,
+                         int rgb_stride, PixContext *pctx, const uint32_t *pal)
 {
     int i, j, p;
+    uint8_t *rgb_dst = rgb_pic + x * 3 + y * rgb_stride;
 
-    rgb_stride = rgb_dst ? rgb_stride : 0;
-    rgb_dst    = rgb_dst ? rgb_dst + x * 3 + y * rgb_stride : NULL;
     dst += x + y * stride;
 
     for (j = 0; j < height; j++) {
@@ -310,15 +303,13 @@ static int decode_region(ArithCoder *acoder, uint8_t *dst, uint8_t *rgb_dst,
             else
                 p = decode_pixel_in_context(acoder, pctx, dst + i, stride,
                                             i, j, width - i - 1);
-            if (p < 0)
-                return p;
             dst[i] = p;
 
-            if (rgb_dst)
+            if (rgb_pic)
                 AV_WB24(rgb_dst + i * 3, pal[p]);
         }
         dst     += stride;
-        rgb_dst  = FF_PTR_ADD(rgb_dst, rgb_stride);
+        rgb_dst += rgb_stride;
     }
 
     return 0;
@@ -375,8 +366,8 @@ static int motion_compensation(MSS12Context const *c,
 }
 
 static int decode_region_masked(MSS12Context const *c, ArithCoder *acoder,
-                                uint8_t *dst, ptrdiff_t stride, uint8_t *mask,
-                                ptrdiff_t mask_stride, int x, int y,
+                                uint8_t *dst, int stride, uint8_t *mask,
+                                int mask_stride, int x, int y,
                                 int width, int height,
                                 PixContext *pctx)
 {
@@ -404,8 +395,6 @@ static int decode_region_masked(MSS12Context const *c, ArithCoder *acoder,
                 else
                     p = decode_pixel_in_context(acoder, pctx, dst + i, stride,
                                                 i, j, width - i - 1);
-                if (p < 0)
-                    return p;
                 dst[i] = p;
                 if (c->rgb_pic)
                     AV_WB24(rgb_dst + i * 3, c->pal[p]);
@@ -475,22 +464,18 @@ static int decode_region_intra(SliceContext *sc, ArithCoder *acoder,
 
     if (!mode) {
         int i, j, pix, rgb_pix;
-        ptrdiff_t stride     = c->pal_stride;
-        ptrdiff_t rgb_stride = c->rgb_stride;
+        int stride       = c->pal_stride;
+        int rgb_stride   = c->rgb_stride;
         uint8_t *dst     = c->pal_pic + x     + y * stride;
-        uint8_t *rgb_dst = c->rgb_pic ? c->rgb_pic + x * 3 + y * rgb_stride : NULL;
+        uint8_t *rgb_dst = c->rgb_pic + x * 3 + y * rgb_stride;
 
         pix     = decode_pixel(acoder, &sc->intra_pix_ctx, NULL, 0, 0);
-        if (pix < 0)
-            return pix;
         rgb_pix = c->pal[pix];
-        for (i = 0; i < height; i++, dst += stride) {
+        for (i = 0; i < height; i++, dst += stride, rgb_dst += rgb_stride) {
             memset(dst, pix, width);
-            if (rgb_dst) {
+            if (c->rgb_pic)
                 for (j = 0; j < width * 3; j += 3)
                     AV_WB24(rgb_dst + j, rgb_pix);
-                rgb_dst += rgb_stride;
-            }
         }
     } else {
         return decode_region(acoder, c->pal_pic, c->rgb_pic,
@@ -511,8 +496,6 @@ static int decode_region_inter(SliceContext *sc, ArithCoder *acoder,
 
     if (!mode) {
         mode = decode_pixel(acoder, &sc->inter_pix_ctx, NULL, 0, 0);
-        if (mode < 0)
-            return mode;
 
         if (c->avctx->err_recognition & AV_EF_EXPLODE &&
             ( c->rgb_pic && mode != 0x01 && mode != 0x02 && mode != 0x04 ||
@@ -544,8 +527,6 @@ int ff_mss12_decode_rect(SliceContext *sc, ArithCoder *acoder,
                          int x, int y, int width, int height)
 {
     int mode, pivot;
-    if (acoder->overread > MAX_OVERREAD)
-        return AVERROR_INVALIDDATA;
 
     mode = acoder->get_model_sym(acoder, &sc->split_mode);
 
@@ -592,26 +573,21 @@ av_cold int ff_mss12_decode_init(MSS12Context *c, int version,
 
     if (AV_RB32(avctx->extradata) < avctx->extradata_size) {
         av_log(avctx, AV_LOG_ERROR,
-               "Insufficient extradata size: expected %"PRIu32" got %d\n",
+               "Insufficient extradata size: expected %d got %d\n",
                AV_RB32(avctx->extradata),
                avctx->extradata_size);
         return AVERROR_INVALIDDATA;
     }
 
-    avctx->coded_width  = FFMAX(AV_RB32(avctx->extradata + 20), avctx->width);
-    avctx->coded_height = FFMAX(AV_RB32(avctx->extradata + 24), avctx->height);
+    avctx->coded_width  = AV_RB32(avctx->extradata + 20);
+    avctx->coded_height = AV_RB32(avctx->extradata + 24);
     if (avctx->coded_width > 4096 || avctx->coded_height > 4096) {
         av_log(avctx, AV_LOG_ERROR, "Frame dimensions %dx%d too large",
                avctx->coded_width, avctx->coded_height);
         return AVERROR_INVALIDDATA;
     }
-    if (avctx->coded_width < 1 || avctx->coded_height < 1) {
-        av_log(avctx, AV_LOG_ERROR, "Frame dimensions %dx%d too small",
-               avctx->coded_width, avctx->coded_height);
-        return AVERROR_INVALIDDATA;
-    }
 
-    av_log(avctx, AV_LOG_DEBUG, "Encoder version %"PRIu32".%"PRIu32"\n",
+    av_log(avctx, AV_LOG_DEBUG, "Encoder version %d.%d\n",
            AV_RB32(avctx->extradata + 4), AV_RB32(avctx->extradata + 8));
     if (version != AV_RB32(avctx->extradata + 4) > 1) {
         av_log(avctx, AV_LOG_ERROR,
@@ -628,13 +604,13 @@ av_cold int ff_mss12_decode_init(MSS12Context *c, int version,
     }
     av_log(avctx, AV_LOG_DEBUG, "%d free colour(s)\n", c->free_colours);
 
-    av_log(avctx, AV_LOG_DEBUG, "Display dimensions %"PRIu32"x%"PRIu32"\n",
+    av_log(avctx, AV_LOG_DEBUG, "Display dimensions %dx%d\n",
            AV_RB32(avctx->extradata + 12), AV_RB32(avctx->extradata + 16));
     av_log(avctx, AV_LOG_DEBUG, "Coded dimensions %dx%d\n",
            avctx->coded_width, avctx->coded_height);
     av_log(avctx, AV_LOG_DEBUG, "%g frames per second\n",
            av_int2float(AV_RB32(avctx->extradata + 28)));
-    av_log(avctx, AV_LOG_DEBUG, "Bitrate %"PRIu32" bps\n",
+    av_log(avctx, AV_LOG_DEBUG, "Bitrate %d bps\n",
            AV_RB32(avctx->extradata + 32));
     av_log(avctx, AV_LOG_DEBUG, "Max. lead time %g ms\n",
            av_int2float(AV_RB32(avctx->extradata + 36)));
@@ -673,7 +649,7 @@ av_cold int ff_mss12_decode_init(MSS12Context *c, int version,
                             (version ? 8 : 0) + i * 3);
 
     c->mask_stride = FFALIGN(avctx->width, 16);
-    c->mask        = av_malloc_array(c->mask_stride, avctx->height);
+    c->mask        = av_malloc(c->mask_stride * avctx->height);
     if (!c->mask) {
         av_log(avctx, AV_LOG_ERROR, "Cannot allocate mask plane\n");
         return AVERROR(ENOMEM);

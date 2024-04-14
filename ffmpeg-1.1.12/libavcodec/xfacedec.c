@@ -24,9 +24,10 @@
  * X-Face decoder, based on libcompface, by James Ashton.
  */
 
+#include "libavutil/pixdesc.h"
 #include "avcodec.h"
-#include "codec_internal.h"
-#include "decode.h"
+#include "bytestream.h"
+#include "internal.h"
 #include "xface.h"
 
 static int pop_integer(BigInt *b, const ProbRange *pranges)
@@ -86,11 +87,16 @@ static void decode_block(BigInt *b, char *bitmap, int w, int h, int level)
 }
 
 typedef struct XFaceContext {
+    AVFrame frame;
     uint8_t bitmap[XFACE_PIXELS]; ///< image used internally for decoding
 } XFaceContext;
 
 static av_cold int xface_decode_init(AVCodecContext *avctx)
 {
+    XFaceContext *xface = avctx->priv_data;
+
+    avcodec_get_frame_defaults(&xface->frame);
+
     if (avctx->width || avctx->height) {
         if (avctx->width != XFACE_WIDTH || avctx->height != XFACE_HEIGHT) {
             av_log(avctx, AV_LOG_ERROR,
@@ -107,8 +113,19 @@ static av_cold int xface_decode_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
-                              int *got_frame, AVPacket *avpkt)
+static av_cold int xface_decode_close(AVCodecContext *avctx)
+{
+    XFaceContext *xface = avctx->priv_data;
+
+    if (xface->frame.data[0])
+        avctx->release_buffer(avctx, &xface->frame);
+
+    return 0;
+}
+
+static int xface_decode_frame(AVCodecContext *avctx,
+                              void *data, int *got_frame,
+                              AVPacket *avpkt)
 {
     XFaceContext *xface = avctx->priv_data;
     int ret, i, j, k;
@@ -117,10 +134,14 @@ static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     char *buf;
     int64_t c;
 
-    if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
+    if (xface->frame.data[0])
+        avctx->release_buffer(avctx, &xface->frame);
+    xface->frame.data[0] = NULL;
+    if ((ret = ff_get_buffer(avctx, &xface->frame)) < 0)
         return ret;
+    xface->frame.reference = 0;
 
-    for (i = 0, k = 0; i < avpkt->size && avpkt->data[i]; i++) {
+    for (i = 0, k = 0; avpkt->data[i] && i < avpkt->size; i++) {
         c = avpkt->data[i];
 
         /* ignore invalid digits */
@@ -152,7 +173,7 @@ static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
     ff_xface_generate_face(xface->bitmap, xface->bitmap);
 
     /* convert image from 1=black 0=white bitmap to MONOWHITE */
-    buf = frame->data[0];
+    buf = xface->frame.data[0];
     for (i = 0, j = 0, k = 0, byte = 0; i < XFACE_PIXELS; i++) {
         byte += xface->bitmap[i];
         if (k == 7) {
@@ -164,22 +185,24 @@ static int xface_decode_frame(AVCodecContext *avctx, AVFrame *frame,
         }
         if (j == XFACE_WIDTH/8) {
             j = 0;
-            buf += frame->linesize[0];
+            buf += xface->frame.linesize[0];
         }
     }
 
     *got_frame = 1;
+    *(AVFrame*)data = xface->frame;
 
     return avpkt->size;
 }
 
-const FFCodec ff_xface_decoder = {
-    .p.name         = "xface",
-    CODEC_LONG_NAME("X-face image"),
-    .p.type         = AVMEDIA_TYPE_VIDEO,
-    .p.id           = AV_CODEC_ID_XFACE,
-    .p.capabilities = AV_CODEC_CAP_DR1,
+AVCodec ff_xface_decoder = {
+    .name           = "xface",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_XFACE,
     .priv_data_size = sizeof(XFaceContext),
     .init           = xface_decode_init,
-    FF_CODEC_DECODE_CB(xface_decode_frame),
+    .close          = xface_decode_close,
+    .decode         = xface_decode_frame,
+    .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_MONOWHITE, AV_PIX_FMT_NONE },
+    .long_name      = NULL_IF_CONFIG_SMALL("X-face image"),
 };

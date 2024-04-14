@@ -25,10 +25,9 @@
  */
 
 #include "avformat.h"
-#include "demux.h"
 #include "internal.h"
 #include "subtitles.h"
-#include "avio_internal.h"
+#include "libavcodec/internal.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/intreadwrite.h"
@@ -37,7 +36,7 @@ typedef struct {
     FFDemuxSubtitlesQueue q;
 } SubViewerContext;
 
-static int subviewer_probe(const AVProbeData *p)
+static int subviewer_probe(AVProbeData *p)
 {
     char c;
     const unsigned char *ptr = p->buf;
@@ -45,19 +44,10 @@ static int subviewer_probe(const AVProbeData *p)
     if (AV_RB24(ptr) == 0xEFBBBF)
         ptr += 3;  /* skip UTF-8 BOM */
     if (sscanf(ptr, "%*u:%*u:%*u.%*u,%*u:%*u:%*u.%*u%c", &c) == 1)
-        return AVPROBE_SCORE_EXTENSION;
+        return AVPROBE_SCORE_MAX/2;
     if (!strncmp(ptr, "[INFORMATION]", 13))
         return AVPROBE_SCORE_MAX/3;
     return 0;
-}
-
-static int get_multiplier(int e) {
-    switch (e) {
-    case 1  : return 100;
-    case 2  : return 10;
-    case 3  : return 1;
-    default : return -1;
-    }
 }
 
 static int read_ts(const char *s, int64_t *start, int *duration)
@@ -65,18 +55,11 @@ static int read_ts(const char *s, int64_t *start, int *duration)
     int64_t end;
     int hh1, mm1, ss1, ms1;
     int hh2, mm2, ss2, ms2;
-    int multiplier1, multiplier2;
-    int ms1p1, ms1p2, ms2p1, ms2p2;
 
-    if (sscanf(s, "%u:%u:%u.%n%u%n,%u:%u:%u.%n%u%n",
-               &hh1, &mm1, &ss1, &ms1p1, &ms1, &ms1p2, &hh2, &mm2, &ss2, &ms2p1, &ms2, &ms2p2) == 8) {
-        multiplier1 = get_multiplier(ms1p2 - ms1p1);
-        multiplier2 = get_multiplier(ms2p2 - ms2p1);
-        if (multiplier1 <= 0 ||multiplier2 <= 0)
-            return -1;
-
-        end    = (hh2*3600LL + mm2*60LL + ss2) * 1000LL + ms2 * multiplier2;
-        *start = (hh1*3600LL + mm1*60LL + ss1) * 1000LL + ms1 * multiplier1;
+    if (sscanf(s, "%u:%u:%u.%u,%u:%u:%u.%u",
+               &hh1, &mm1, &ss1, &ms1, &hh2, &mm2, &ss2, &ms2) == 8) {
+        end    = (hh2*3600LL + mm2*60LL + ss2) * 100LL + ms2;
+        *start = (hh1*3600LL + mm1*60LL + ss1) * 100LL + ms1;
         *duration = end - *start;
         return 0;
     }
@@ -95,18 +78,13 @@ static int subviewer_read_header(AVFormatContext *s)
 
     if (!st)
         return AVERROR(ENOMEM);
-    res = ffio_ensure_seekback(s->pb, 3);
-    if (res < 0)
-        return res;
-    if (avio_rb24(s->pb) != 0xefbbbf)
-        avio_seek(s->pb, -3, SEEK_CUR);
-    avpriv_set_pts_info(st, 64, 1, 1000);
-    st->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
-    st->codecpar->codec_id   = AV_CODEC_ID_SUBVIEWER;
+    avpriv_set_pts_info(st, 64, 1, 100);
+    st->codec->codec_type = AVMEDIA_TYPE_SUBTITLE;
+    st->codec->codec_id   = AV_CODEC_ID_SUBVIEWER;
 
     av_bprint_init(&header, 0, AV_BPRINT_SIZE_UNLIMITED);
 
-    while (!avio_feof(s->pb)) {
+    while (!url_feof(s->pb)) {
         char line[2048];
         int64_t pos = 0;
         int len = ff_get_line(s->pb, line, sizeof(line));
@@ -123,11 +101,11 @@ static int subviewer_read_header(AVFormatContext *s)
                 strstr(line, "[FONT]") || strstr(line, "[STYLE]"))
                 continue;
 
-            if (!st->codecpar->extradata) { // header not finalized yet
+            if (!st->codec->extradata) { // header not finalized yet
                 av_bprintf(&header, "%s\n", line);
                 if (!strncmp(line, "[END INFORMATION]", 17) || !strncmp(line, "[SUBTITLE]", 10)) {
                     /* end of header */
-                    res = ff_bprint_to_codecpar_extradata(st->codecpar, &header);
+                    res = avpriv_bprint_to_extradata(st->codec, &header);
                     if (res < 0)
                         goto end;
                 } else if (strncmp(line, "[INFORMATION]", 13)) {
@@ -154,10 +132,6 @@ static int subviewer_read_header(AVFormatContext *s)
             new_event = 1;
             pos = avio_tell(s->pb);
         } else if (*line) {
-            if (pts_start == AV_NOPTS_VALUE) {
-                res = AVERROR_INVALIDDATA;
-                goto end;
-            }
             if (!new_event) {
                 sub = ff_subtitles_queue_insert(&subviewer->q, "\n", 1, 1);
                 if (!sub) {
@@ -179,22 +153,42 @@ static int subviewer_read_header(AVFormatContext *s)
         }
     }
 
-    ff_subtitles_queue_finalize(s, &subviewer->q);
+    ff_subtitles_queue_finalize(&subviewer->q);
 
 end:
     av_bprint_finalize(&header, NULL);
     return res;
 }
 
-const FFInputFormat ff_subviewer_demuxer = {
-    .p.name         = "subviewer",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("SubViewer subtitle format"),
-    .p.extensions   = "sub",
+static int subviewer_read_packet(AVFormatContext *s, AVPacket *pkt)
+{
+    SubViewerContext *subviewer = s->priv_data;
+    return ff_subtitles_queue_read_packet(&subviewer->q, pkt);
+}
+
+static int subviewer_read_seek(AVFormatContext *s, int stream_index,
+                               int64_t min_ts, int64_t ts, int64_t max_ts, int flags)
+{
+    SubViewerContext *subviewer = s->priv_data;
+    return ff_subtitles_queue_seek(&subviewer->q, s, stream_index,
+                                   min_ts, ts, max_ts, flags);
+}
+
+static int subviewer_read_close(AVFormatContext *s)
+{
+    SubViewerContext *subviewer = s->priv_data;
+    ff_subtitles_queue_clean(&subviewer->q);
+    return 0;
+}
+
+AVInputFormat ff_subviewer_demuxer = {
+    .name           = "subviewer",
+    .long_name      = NULL_IF_CONFIG_SMALL("SubViewer subtitle format"),
     .priv_data_size = sizeof(SubViewerContext),
-    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = subviewer_probe,
     .read_header    = subviewer_read_header,
-    .read_packet    = ff_subtitles_read_packet,
-    .read_seek2     = ff_subtitles_read_seek,
-    .read_close     = ff_subtitles_read_close,
+    .read_packet    = subviewer_read_packet,
+    .read_seek2     = subviewer_read_seek,
+    .read_close     = subviewer_read_close,
+    .extensions     = "sub",
 };
