@@ -1,5 +1,5 @@
 # FFmpeg custom builder for Android
-This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://github.com/FFmpeg/FFmpeg/tree/n0.7.1), [FFmpeg 0.11.5](https://github.com/FFmpeg/FFmpeg/tree/n0.11.5), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android.
+This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://github.com/FFmpeg/FFmpeg/tree/n0.7.1), [FFmpeg 0.11.5](https://github.com/FFmpeg/FFmpeg/tree/n0.11.5), [FFmpeg 2.2.4](https://github.com/FFmpeg/FFmpeg/tree/n2.2.4), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android with legacy versions support.
 
 ### Building
 1. If there is none in-the-box, install the missing packages:
@@ -57,4 +57,8 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
 ```
 
 ### License
-This builder using FFmpeg (modified) source code licensed under [LGPLv2.1 or later version](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv2.1) with [LGPLv3 licensing model](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv3) as default. Scripts are also licensed under [LGPLv3](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.BUILDER).
+This builder using FFmpeg (modified) source code licensed under [LGPLv2.1 or later version](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv2.1) with [LGPLv3 licensing model](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.FFMPEG.LGPLv3) by default. \
+Scripts are also licensed under [LGPLv3](https://github.com/tinelix/ffmpeg-android-builder/blob/main/COPYING.BUILDER).
+
+### Disclaimer
+In countries where MPEG standard algorithm patents are still in force and possibly used in open source projects within FFmpeg, royalties will likely need to be paid to their owners. [Read more in the legal information about FFmpeg.](https://ffmpeg.org/legal.html)
