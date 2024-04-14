@@ -171,8 +171,8 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-debug \
 		--enable-network \
 		--enable-protocol=file,http,async,tcp,tls \
-		--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
-		--enable-demuxer=flv,mp3,mp4,ogg,mov,h264,data \
+		--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,mp3,ogg,theora \
+		--enable-demuxer=flv,mp3,mp4,ogg,ogv,mov,h264,data \
 		--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
 		--enable-encoder=libmp3lame,vorbis,aac \
 		--enable-muxer=mp4,ogg,mp3 \
