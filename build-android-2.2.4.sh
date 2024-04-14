@@ -76,7 +76,7 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fasm \
 		-finline-limit=300 -ffast-math \
 		-fstrict-aliasing -Werror=strict-aliasing \
 		-Wno-psabi \
@@ -87,12 +87,13 @@ FFMPEG_TARGET_OS="linux"
 
 
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_CFLAGS+=" -march=armv8-a"
+	FFMPEG_CFLAGS+=" -fpic -march=armv8-a"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
-	FFMPEG_CFLAGS+=" -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
+	FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86"
 else
+	FFMPEG_CFLAGS+=" -fPIC"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 fi;
 
