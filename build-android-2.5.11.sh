@@ -168,7 +168,7 @@ if [ -z "$FFMPEG_ST" ]; then
 	FFMPEG_FLAGS+=" --disable-securetransport"
 fi;
 
-cd ffmpeg-3.1.4
+cd ffmpeg-2.5.11
 
 if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
