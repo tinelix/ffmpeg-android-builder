@@ -96,7 +96,7 @@ if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
 	if [ $NDK_RELEASE == "r8e" ]; then
-		FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -m32"
+		FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -msse3 -mfpmath=sse -m32"
 	else
 		FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
 	fi;
