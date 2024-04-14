@@ -28,6 +28,13 @@ else
     FFMPEG_INPUT_ARCH=$1
 fi
 
+if [[ -z $2 ]];
+then
+    read -p "Specify NDK release [r7, r8e, r10e]: " NDK_RELEASE
+else
+    NDK_RELEASE=$2
+fi
+
 if [ ! -d "ffmpeg-1.1.12" ]; then
   echo "[ERROR] FFmpeg 1.1.12 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
