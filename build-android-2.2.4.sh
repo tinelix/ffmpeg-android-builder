@@ -198,7 +198,11 @@ if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
 		--enable-asm"
 else
-	FFMPEG_FLAGS+=" --disable-yasm"
+	if [ $NDK_RELEASE == "r8e" ]; then
+		FFMPEG_FLAGS+=" --disable-asm"
+	else
+		FFMPEG_FLAGS+=" --disable-yasm"
+	fi;
 fi;
 
 # Build workaround special for FFmpeg 3.1.x
