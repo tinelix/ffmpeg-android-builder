@@ -85,7 +85,6 @@ fi;
 
 FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fasm \
 		-finline-limit=300 -ffast-math \
-		-fstrict-aliasing -Werror=strict-aliasing \
 		-Wno-psabi \
 		-DANDROID -DNDEBUG"
 
@@ -112,29 +111,31 @@ else
 		    echo "[ERROR] FFmpeg build with NDK r8e for armv8a not supported.";
 		    exit 1
 		else
-			FFMPEG_CFLAGS+=" -fdiagnostics-color=always"
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing"
 		    ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 		    ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
 		    ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 		fi;
 	elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
 		if [ $NDK_RELEASE == "r8e" ]; then
+			FFMPEG_CFLAGS+=" -DHAVE_SYS_UIO_H=1 -fno-strict-aliasing"
 			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
 			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.4.3"
 		else
-			FFMPEG_CFLAGS+=" -fdiagnostics-color=always"
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing -Werror=strict-aliasing"
 			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
 			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
 		fi;
 	else
 		if [ $NDK_RELEASE == "r8e" ]; then
+			FFMPEG_CFLAGS+=" -DHAVE_SYS_UIO_H=1 -fno-strict-aliasing"
 			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
 			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
 		else
-			FFMPEG_CFLAGS+=" -fdiagnostics-color=always"
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing -Werror=strict-aliasing"
 			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
 			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
 			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
