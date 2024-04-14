@@ -27,23 +27,33 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
 -------------------------------------------------------------------------------------------------------------------|
 | FFmpeg version  | NDK version | Supported ABIs   | Supported Android versions   | Tested in Linux distros        |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 4.0.4           | r10e        | armeabi          | Android 2.0 and above        | Debian 8.11.0                  |
+| 4.0.4           | r10e        | armeabi          | Android 2.3 and above        | Debian 8.11.0                  |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 3.1.4           | r10e        | armeabi          | Android 2.0 and above        |                                |
+| 3.1.4           | r10e        | armeabi          | Android 2.3 and above        | -                              |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 0.11.5          | r8e         | armeabi          | Android 2.0 and above        |                                |
-|                 |             | armeabi-v7a      |                              |                                |
+| 2.2.4           | r10e        | armeabi          | Android 2.0* and above       | Debian 8.11.0                  |
+|                 | r8e         | armeabi-v7a      |                              |                                |
+|                 |             | x86-eabi         |                              |                                |
+|                 |             | arm64-v8a        |                              |                                |
 |-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 0.7.1           | r8e         | armeabi          | Android 2.0 and above        |                                |
-|                 |             | armeabi-v7a      |                              |                                |
-|                 |             | x86              |                              |                                |
+| 0.11.5          | r8e         | armeabi          | Android 2.0 and above        | -                              |
+|                 | r7          | armeabi-v7a      |                              |                                |
+|                 | r6          | x86-eabi         |                              |                                |
+|                 | r5b         |                  |                              |                                |
+|-----------------|-------------|------------------|------------------------------|--------------------------------|
+| 0.7.1           | r8e         | armeabi          | Android 2.0 and above        | -                              |
+|                 | r7          | armeabi-v7a      |                              |                                |
+|                 | r6          | x86-eabi         |                              |                                |
+|                 | r5          |                  |                              |                                |
 ----------------------------------------------------------------------------------|--------------------------------|
+
+* if used Android NDK r8e for 32-bit build
 ```
 
 ### License
