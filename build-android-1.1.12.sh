@@ -87,7 +87,7 @@ FFMPEG_TARGET_OS="linux"
 
 
 if [ $FFMPEG_INPUT_ARCH == "x86" ]; then
-	FFMPEG_CFLAGS+=" -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
+	FFMPEG_CFLAGS+=" -O2 -march=i686 -m32"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86"
 else
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
