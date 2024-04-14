@@ -138,11 +138,9 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-ffprobe \
 		--disable-doc \
 		--disable-htmlpages \
-		--disable-d3d11va \
 		--disable-dxva2 \
 		--disable-vaapi \
 		--disable-vdpau \
-		--disable-videotoolbox \
 		--disable-encoders \
 		--disable-decoders \
 		--disable-demuxers \
@@ -161,12 +159,6 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--enable-small \
 		--enable-inline-asm \
 		--enable-optimizations"
-
-if [ -z "$FFMPEG_ST" ]; then
-	echo "[WARNING] FFMPEG_ST variable is not defined."
-	echo "          Streaming playback may be limited.";
-	FFMPEG_FLAGS+=" --disable-securetransport"
-fi;
 
 cd ffmpeg-2.5.11
 
