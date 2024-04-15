@@ -11,11 +11,11 @@ FFMPEG_VERSION := 4.0.4
 
 LOCAL_MODULE := ffmpeg-prebuilt
 
-LOCAL_SRC_FILES := ../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg-v${FFMPEG_VERSION}.so
+LOCAL_SRC_FILES := ../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg.so
 
 LOCAL_EXPORT_C_INCLUDES := ../../jniLibs/$(TARGET_ARCH_ABI)/include
 
-LOCAL_EXPORT_LDLIBS := ../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg-v${FFMPEG_VERSION}.so
+LOCAL_EXPORT_LDLIBS := ../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg.so
 
 LOCAL_PRELINK_MODULE := true
 
@@ -26,10 +26,10 @@ include $(CLEAR_VARS)
 
 LOCAL_ALLOW_UNDEFINED_SYMBOLS=false
 LOCAL_MODULE := ffmpeg-player
-LOCAL_SRC_FILES := ffmpeg-player.c
+LOCAL_SRC_FILES := mplayer_example.c android.c
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../../jniLibs/$(TARGET_ARCH_ABI)/include
 LOCAL_SHARED_LIBRARY := ffmpeg-prebuilt
-LOCAL_LDLIBS    := -llog -lz -lm $(LOCAL_PATH)/../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg-v${FFMPEG_VERSION}.so
+LOCAL_LDLIBS    := -llog -lz -lm $(LOCAL_PATH)/../../jniLibs/$(TARGET_ARCH_ABI)/libffmpeg.so
 
 include $(BUILD_SHARED_LIBRARY)
 
