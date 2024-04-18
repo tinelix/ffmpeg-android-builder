@@ -35,20 +35,20 @@ else
     NDK_RELEASE=$2
 fi
 
-if [ ! -d "ffmpeg-2.5.8" ]; then
-  echo "[ERROR] FFmpeg 2.5.8 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
+if [ ! -d "ffmpeg-2.8.11" ]; then
+  echo "[ERROR] FFmpeg 2.8.11 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
 fi
 
-FFMPEG_VERSION="2.5.8"
+FFMPEG_VERSION="2.8.11"
 
 echo "Creating output directories...";
 chmod -R 0777 .
-mkdir -p ffmpeg-2.5.8/android
-mkdir -p ffmpeg-2.5.8/android/armeabi
-mkdir -p ffmpeg-2.5.8/android/armeabi-v7a
-mkdir -p ffmpeg-2.5.8/android/arm64-v8a
-mkdir -p ffmpeg-2.5.8/android/x86
+mkdir -p ffmpeg-2.8.11/android
+mkdir -p ffmpeg-2.8.11/android/armeabi
+mkdir -p ffmpeg-2.8.11/android/armeabi-v7a
+mkdir -p ffmpeg-2.8.11/android/arm64-v8a
+mkdir -p ffmpeg-2.8.11/android/x86
 
 echo "Configuring FFmpeg v${FFMPEG_VERSION} build...";
 
@@ -192,7 +192,7 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--enable-inline-asm \
 		--enable-optimizations"
 
-cd ffmpeg-2.5.8
+cd ffmpeg-2.8.11
 
 if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
