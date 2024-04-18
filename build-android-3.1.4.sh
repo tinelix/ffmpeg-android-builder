@@ -28,6 +28,13 @@ else
     FFMPEG_INPUT_ARCH=$1
 fi
 
+if [[ -z $2 ]];
+then
+    read -p "Specify NDK release [r8e, r10e]: " NDK_RELEASE
+else
+    NDK_RELEASE=$2
+fi
+
 if [ ! -d "ffmpeg-3.1.4" ]; then
   echo "[ERROR] FFmpeg 3.1.4 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
@@ -76,23 +83,26 @@ else
 	exit 1;
 fi;
 
-FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fpic -fasm \
+FFMPEG_CFLAGS="-std=c99 -Os -Wall -pipe -fasm \
 		-finline-limit=300 -ffast-math \
-		-fstrict-aliasing -Werror=strict-aliasing \
 		-Wno-psabi \
-		-fdiagnostics-color=always \
 		-DANDROID -DNDEBUG"
 
 FFMPEG_TARGET_OS="linux"
 
 
 if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-	FFMPEG_CFLAGS+=" -march=armv8-a"
+	FFMPEG_CFLAGS+=" -fpic -march=armv8-a"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-arm64"
 elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
-	FFMPEG_CFLAGS+=" -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
+	if [ $NDK_RELEASE == "r8e" ]; then
+		FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -msse3 -mfpmath=sse -m32"
+	else
+		FFMPEG_CFLAGS+=" -fPIC -O2 -march=i686 -mtune=intel -msse3 -mfpmath=sse -m32"
+	fi;
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-x86"
 else
+	FFMPEG_CFLAGS+=" -fPIC"
 	ANDROID_NDK_SYSROOT="${ANDROID_NDK_HOME}/platforms/android-${ANDROID_TARGET_API}/arch-${ANDROID_TOOLCHAIN_CPUABI}"
 fi;
 
@@ -101,17 +111,39 @@ if [ -z "$ANDROID_NDK_HOME" ]; then # requires NDK r10e+
 	exit 1
 else
 	if [ $FFMPEG_INPUT_ARCH == "armv8a" ]; then
-		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
-		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
-		ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		if [ $NDK_RELEASE == "r8e" ]; then
+		    echo "[ERROR] FFmpeg build with NDK r8e for armv8a not supported.";
+		    exit 1
+		else
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing"
+		    ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
+		    ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
+		    ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		fi;
 	elif [ $FFMPEG_INPUT_ARCH == "x86" ]; then
-		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
-		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
-		ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		if [ $NDK_RELEASE == "r8e" ]; then
+			FFMPEG_CFLAGS+=" -DHAVE_SYS_UIO_H=1 -fno-strict-aliasing"
+			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
+			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.4.3"
+		else
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing -Werror=strict-aliasing"
+			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TARGET_ARCH}-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android-"
+			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-android/4.9"
+		fi;
 	else
-		ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
-		ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
-		ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
+		if [ $NDK_RELEASE == "r8e" ]; then
+			FFMPEG_CFLAGS+=" -DHAVE_SYS_UIO_H=1 -fno-strict-aliasing"
+			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.4.3/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
+			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.4.3"
+		else
+			FFMPEG_CFLAGS+=" -fdiagnostics-color=always -fstrict-aliasing -Werror=strict-aliasing"
+			ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK_HOME}/toolchains/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-4.9/prebuilt/${FFMPEG_BUILD_PLATFORM}-x86_64"
+			ANDROID_NDK_TOOLCHAINS="${ANDROID_TOOLCHAIN_ROOT}/bin/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi-"
+			ANDROID_NDK_GCC="${ANDROID_TOOLCHAIN_ROOT}/lib/gcc/${ANDROID_TOOLCHAIN_CPUABI}-${FFMPEG_BUILD_PLATFORM}-androideabi/4.9"
+		fi;
 	fi;
 fi
 
@@ -138,11 +170,9 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-ffprobe \
 		--disable-doc \
 		--disable-htmlpages \
-		--disable-d3d11va \
 		--disable-dxva2 \
 		--disable-vaapi \
 		--disable-vdpau \
-		--disable-videotoolbox \
 		--disable-encoders \
 		--disable-decoders \
 		--disable-demuxers \
@@ -162,19 +192,17 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--enable-inline-asm \
 		--enable-optimizations"
 
-if [ -z "$FFMPEG_ST" ]; then
-	echo "[WARNING] FFMPEG_ST variable is not defined."
-	echo "          Streaming playback may be limited.";
-	FFMPEG_FLAGS+=" --disable-securetransport"
-fi;
-
 cd ffmpeg-3.1.4
 
 if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
 		--enable-asm"
 else
-	FFMPEG_FLAGS+=" --disable-yasm"
+	if [ $NDK_RELEASE == "r8e" ]; then
+		FFMPEG_FLAGS+=" --disable-asm"
+	else
+		FFMPEG_FLAGS+=" --disable-yasm"
+	fi;
 fi;
 
 # Build workaround special for FFmpeg 3.1.x
