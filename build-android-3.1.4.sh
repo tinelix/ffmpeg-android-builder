@@ -168,6 +168,7 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-ffmpeg \
 		--disable-ffplay \
 		--disable-ffprobe \
+		--disable-ffserver \
 		--disable-doc \
 		--disable-htmlpages \
 		--disable-dxva2 \
@@ -179,15 +180,16 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--disable-parsers \
 		--disable-muxers \
 		--disable-filters \
+		--disable-bsfs \
 		--disable-iconv \
 		--disable-debug \
 		--enable-network \
 		--enable-protocol=file,http,async,tcp,tls \
 		--enable-parser=h263,h264,vp8,flac,aac,aac_latm,vorbis,ogg,theora \
-		--enable-demuxer=flv,mp3,mp4,mov,ogg,data \
+		--enable-demuxer=flv,mp3,mov,ogg,data \
 		--enable-decoder=mp3,aac,aac_latm,vp8,h263,h264,theora,flac,vorbis \
 		--enable-encoder=libmp3lame,vorbis,aac \
-		--enable-muxer=mp4,ogg,mp3 \
+		--enable-muxer=mov,ogg,mp3 \
 		--enable-small \
 		--enable-inline-asm \
 		--enable-optimizations"
