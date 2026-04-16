@@ -35,7 +35,7 @@ else
     NDK_RELEASE=$2
 fi
 
-if [ ! -d "ffmpeg-3.1.4" ]; then
+if [ ! -d "ffmpeg/3.1.4" ]; then
   echo "[ERROR] FFmpeg 3.1.4 source code not found. Please download it from https://github.com/ffmpeg/ffmpeg.";
   exit 1
 fi
@@ -44,11 +44,11 @@ FFMPEG_VERSION="3.1.4"
 
 echo "Creating output directories...";
 chmod -R 0777 .
-mkdir -p ffmpeg-3.1.4/android
-mkdir -p ffmpeg-3.1.4/android/armeabi
-mkdir -p ffmpeg-3.1.4/android/armeabi-v7a
-mkdir -p ffmpeg-3.1.4/android/arm64-v8a
-mkdir -p ffmpeg-3.1.4/android/x86
+mkdir -p ffmpeg/3.1.4/android
+mkdir -p ffmpeg/3.1.4/android/armeabi
+mkdir -p ffmpeg/3.1.4/android/armeabi-v7a
+mkdir -p ffmpeg/3.1.4/android/arm64-v8a
+mkdir -p ffmpeg/3.1.4/android/x86
 
 echo "Configuring FFmpeg v${FFMPEG_VERSION} build...";
 
@@ -194,7 +194,7 @@ FFMPEG_FLAGS="--target-os=${FFMPEG_TARGET_OS} \
 		--enable-inline-asm \
 		--enable-optimizations"
 
-cd ffmpeg-3.1.4
+cd ffmpeg/3.1.4
 
 if [ $FFMPEG_INPUT_ARCH != "x86" ]; then
 	FFMPEG_FLAGS+=" --enable-yasm \
