@@ -1,5 +1,5 @@
 # FFmpeg custom builder for Android
-This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://github.com/FFmpeg/FFmpeg/tree/n0.7.1), [FFmpeg 0.11.5](https://github.com/FFmpeg/FFmpeg/tree/n0.11.5), [FFmpeg 2.2.4](https://github.com/FFmpeg/FFmpeg/tree/n2.2.4), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android with legacy versions support.
+This is a universal script that makes it easy to build [FFmpeg 0.11.5](https://github.com/FFmpeg/FFmpeg/tree/n0.11.5), [FFmpeg 2.8.11](https://github.com/FFmpeg/FFmpeg/tree/n2.8.11), [FFmpeg 3.1.4](https://github.com/FFmpeg/FFmpeg/tree/n3.1.4) and [FFmpeg 4.0.4](https://github.com/FFmpeg/FFmpeg/tree/n4.0.4) for Android with legacy versions support.
 
 ### Building
 1. If there is none in-the-box, install the missing packages:
@@ -24,34 +24,29 @@ This is a universal script that makes it easy to build [FFmpeg 0.7.1](https://gi
 ### Compatibility table
 
 ```
--------------------------------------------------------------------------------------------------------------------|
++------------------------------------------------------------------------------------------------------------------+
 | FFmpeg version  | NDK version | Supported ABIs   | Supported Android versions   | Tested in Linux distros        |
-|-----------------|-------------|------------------|------------------------------|--------------------------------|
+|-----------------+-------------+------------------+------------------------------+--------------------------------|
 | 4.0.4           | r10e        | armeabi          | Android 2.3 and above        | Debian 8.11.0                  |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
-|-----------------|-------------|------------------|------------------------------|--------------------------------|
+|-----------------+-------------|------------------+------------------------------+--------------------------------|
 | 3.1.4           | r10e        | armeabi          | Android 2.3 and above        | -                              |
 |                 |             | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
-|-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 2.2.4           | r10e        | armeabi          | Android 2.0* and above       | Debian 8.11.0                  |
+|-----------------+-------------|------------------+------------------------------+--------------------------------|
+| 2.8.11          | r10e        | armeabi          | Android 2.0* and above       | Debian 8.11.0                  |
 |                 | r8e         | armeabi-v7a      |                              |                                |
 |                 |             | x86-eabi         |                              |                                |
 |                 |             | arm64-v8a        |                              |                                |
-|-----------------|-------------|------------------|------------------------------|--------------------------------|
+|-----------------|-------------|------------------|------------------------------+--------------------------------|
 | 0.11.5          | r8e         | armeabi          | Android 2.0 and above        | -                              |
 |                 | r7          | armeabi-v7a      |                              |                                |
 |                 | r6          | x86-eabi         |                              |                                |
 |                 | r5b         |                  |                              |                                |
-|-----------------|-------------|------------------|------------------------------|--------------------------------|
-| 0.7.1           | r8e         | armeabi          | Android 2.0 and above        | -                              |
-|                 | r7          | armeabi-v7a      |                              |                                |
-|                 | r6          | x86-eabi         |                              |                                |
-|                 | r5          |                  |                              |                                |
-----------------------------------------------------------------------------------|--------------------------------|
++------------------------------------------------------------------------------------------------------------------+
 
 * if used Android NDK r8e for 32-bit build
 ```
